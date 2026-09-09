@@ -1,0 +1,1 @@
+{"name":"checador","version":"1.0.0","main":"index.js","dependencies":{"@whiskeysockets/baileys":"^6.7.8","googleapis":"^128.0.0","pino":"^8.19.0"},"scripts":{"start":"node index.js"}}
