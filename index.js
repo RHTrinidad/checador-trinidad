@@ -42,24 +42,27 @@ client.on('ready', () => console.log('Client is ready!'));
 
 client.on('message', async msg => {
   try {
-    const chat = await msg.getChat();
     const text = msg.body ? msg.body.toLowerCase().trim() : '';
-    console.log(`NUEVO: "${text}" de ${msg.from} | Grupo:${chat.isGroup}`);
+    console.log(`NUEVO: "${text}" de ${msg.from}`);
 
+    // 1. ID GRUPO - SIN usar getChat para no crashear
     if (text.includes('id grupo')) {
-      console.log('Comando id detectado, respondiendo...');
-      await chat.sendMessage(`ID de este grupo:\n${chat.id._serialized}`);
+      console.log('Enviando ID grupo');
+      await msg.reply(`ID de este grupo:\n${msg.from}`);
       return;
     }
 
+    // 2. ENTRADA / SALIDA
     if (text === 'entrada' || text === 'salida') {
-      let nombre = 'Desconocido';
+      let nombre = msg._data.notifyName || 'Desconocido';
       try {
         const contact = await msg.getContact();
-        nombre = contact.pushname || contact.name || msg._data.notifyName || nombre;
-      } catch (e) { console.log('No se pudo getContact, uso default'); }
+        nombre = contact.pushname || contact.name || nombre;
+      } catch (e) {
+        console.log('getContact falló, usando notifyName');
+      }
       
-      await guardarEnSheet(nombre, msg.from, text);
+      await guardarEnSheet(nombre, msg.author || msg.from, text);
       await msg.reply(text === 'entrada' ? `Buen día, ${nombre}! ☀️ Tu entrada registrada.` : `Gracias ${nombre}, salida registrada.`);
     }
 
@@ -67,5 +70,4 @@ client.on('message', async msg => {
     console.log('Error completo:', e);
   }
 });
-
 client.initialize();
