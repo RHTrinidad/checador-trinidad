@@ -48,24 +48,54 @@ client.on('qr', qr => {
   console.log(`https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`);
 });
 
-client.on('ready', () => {
-  console.log('¡BOT CONECTADO LISTO! YA PUEDES MANDAR ENTRADA');
-});
+cliente.en('mensaje', asincrono MSG => {
+  Prueba {
+    const chat = Espera MSG.getChat();
+    const Texto = MSG.Cuerpo.toLowerCase().Acabado();
 
-client.on('message', async msg => {
-  try {
-    const texto = msg.body.toLowerCase().trim();
-    console.log(`Mensaje: ${texto} de ${msg.from}`);
-    
-    if (texto === 'entrada' || texto === 'salida') {
-      const contacto = await msg.getContact();
-      const nombre = contacto.pushname || contacto.name || 'Desconocido';
-      
-      await guardarEnSheet(nombre, msg.from, texto);
-      await msg.reply(`✅ Registrado: *${texto.toUpperCase()}*\n${nombre}\n${new Date().toLocaleTimeString('es-MX', {timeZone: 'America/Mexico_City'})}`);
+    // ESTO ES LO NUEVO PARA SACAR EL ID DEL GRUPO
+    si (Texto === 'id grupo') {
+      Espera MSG.Respuesta(`ID de este grupo:\n${chat.id._serialized}`);
+      Retorna;
     }
-  } catch (e) {
-    console.log('Error:', e.message);
+
+    // Si es ubicación, detecta entrada/salida automático
+    si (MSG.hasLocation || MSG.type === 'location') {
+      const contacto = Espera MSG.getContact();
+      const nombre = contacto.Pushname || contacto.Nombre || 'Desconocido';
+      
+      // Aquí va tu lógica de 150m
+      // const dentro = calcularDistancia(MSG.location, sucursal) < 150
+
+      // Detectar si es entrada o salida por historial
+      // let tipo = yaTieneEntradaHoy(nombre) ? 'salida' : 'entrada'
+      
+      Espera guardarEnSheet(nombre, MSG.de, Texto || 'ubicacion');
+      
+      si (Texto.includes('entrada') || !yaTieneEntradaHoy) {
+         Espera MSG.Respuesta(`Buen día, ${nombre}! ☀️\nTu entrada fue registrada.\nGracias!`);
+      } sino {
+         Espera MSG.Respuesta(`Gracias.`);
+      }
+      Retorna;
+    }
+
+    Consola.Log(`Mensaje recibido: ${Texto} de ${MSG.de}`);
+
+    si (Texto === 'entrada' || Texto === 'salida') {
+      const contacto = Espera MSG.getContact();
+      const nombre = contacto.Pushname || contacto.Nombre || 'Desconocido';
+      Espera guardarEnSheet(nombre, MSG.de, Texto);
+      si (Texto === 'entrada') {
+        Espera MSG.Respuesta(`Buen día, ${nombre}! ☀️\nTu ${Texto} fue registrada.\nGracias!`);
+      } sino {
+        Espera MSG.Respuesta(`Gracias.`);
+      }
+    }
+  } Atrapa (e) {
+    Consola.Log('Error en mensaje:', e.Mensaje);
+  }
+});
   }
 });
 
