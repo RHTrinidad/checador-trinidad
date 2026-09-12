@@ -3,7 +3,10 @@ const { google } = require('googleapis');
 const configFile = require('./config.js');
 
 const SHEET_ID = process.env.SHEET_ID;
-const CREDS = JSON.parse(process.env.GOOGLE_CREDS);
+let creds = process.env.GOOGLE_CREDS;
+try { creds = JSON.parse(creds); } catch(e) {}
+if (typeof creds === 'string') { try { creds = JSON.parse(creds); } catch(e) {} }
+console.log('GOOGLE_CREDS existe?', !!process.env.GOOGLE_CREDS);
 
 const SUCURSALES = configFile.Sucursales || configFile.sucursales;
 const client = new Client({
