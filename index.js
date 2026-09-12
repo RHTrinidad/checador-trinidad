@@ -8,7 +8,11 @@ const CREDS = JSON.parse(process.env.GOOGLE_CREDS);
 const SUCURSALES = configFile.Sucursales || configFile.sucursales;
 const client = new Client({
   authStrategy: new LocalAuth(),
-  puppeteer: { headless: true, args: ['--no-sandbox','--disable-setuid-sandbox'] }
+  puppeteer: {
+    headless: true,
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu']
+  }
 });
 
 function dist(lat1,lon1,lat2,lon2){
