@@ -30,44 +30,35 @@ async function guardarEnSheet(nombre, numero, tipo) {
     });
     console.log(`Guardado OK: ${nombre} - ${tipo}`);
   } catch (e) {
-    console.log('Error Sheets:', e.message, e);
+    console.log('Error Sheets:', e.message);
   }
 }
 
 client.on('qr', qr => {
   console.log(`https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`);
 });
-
 client.on('ready', () => console.log('Client is ready!'));
 
+// CODIGO QUE NO USA getChat()
 client.on('message', async msg => {
   try {
     const text = msg.body ? msg.body.toLowerCase().trim() : '';
     console.log(`NUEVO: "${text}" de ${msg.from}`);
 
-    // 1. ID GRUPO - SIN usar getChat para no crashear
     if (text.includes('id grupo')) {
-      console.log('Enviando ID grupo');
       await msg.reply(`ID de este grupo:\n${msg.from}`);
+      console.log('ID enviado');
       return;
     }
 
-    // 2. ENTRADA / SALIDA
     if (text === 'entrada' || text === 'salida') {
-      let nombre = msg._data.notifyName || 'Desconocido';
-      try {
-        const contact = await msg.getContact();
-        nombre = contact.pushname || contact.name || nombre;
-      } catch (e) {
-        console.log('getContact falló, usando notifyName');
-      }
-      
+      const nombre = msg._data.notifyName || 'Desconocido';
       await guardarEnSheet(nombre, msg.author || msg.from, text);
       await msg.reply(text === 'entrada' ? `Buen día, ${nombre}! ☀️ Tu entrada registrada.` : `Gracias ${nombre}, salida registrada.`);
     }
-
   } catch (e) {
-    console.log('Error completo:', e);
+    console.log('Error:', e.message);
   }
 });
+
 client.initialize();
