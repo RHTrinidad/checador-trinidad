@@ -48,36 +48,36 @@ client.on('qr', qr => {
   console.log(`https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`);
 });
 
-cliente.en('mensaje', asincrono MSG => {
-  Prueba {
-    const chat = Espera MSG.getChat();
-    const Texto = MSG.Cuerpo ? MSG.Cuerpo.toLowerCase().trim() : '';
+client.on('ready', () => {
+  console.log('Client is ready!');
+});
 
-    Consola.Log(`--- MENSAJE NUEVO ---`);
-    Consola.Log(`De: ${MSG.de} | Grupo?: ${chat.isGroup} | Texto: ${Texto}`);
-    Consola.Log(`Chat ID: ${chat.id._serialized}`);
+// ESTE ES EL CODIGO BUENO
+client.on('message', async msg => {
+  try {
+    const chat = await msg.getChat();
+    const text = msg.body ? msg.body.toLowerCase().trim() : '';
 
-    // FORZAR RESPUESTA A TODO EN GRUPO
-    si (Texto.includes('id grupo') || Texto.includes('id')) {
-      Consola.Log('Detectó comando id grupo, respondiendo...');
-      Espera MSG.Respuesta(`Aqui estoy!\nID: ${chat.id._serialized}\nEs grupo: ${chat.isGroup}`);
-      Retorna;
+    console.log(`MSG: "${text}" de ${msg.from} | Grupo: ${chat.isGroup} | ID: ${chat.id._serialized}`);
+
+    if (text.includes('id grupo')) {
+      await msg.reply(`ID de este grupo:\n${chat.id._serialized}`);
+      return;
     }
 
-    si (Texto === 'entrada' || Texto === 'salida') {
-      const contacto = Espera MSG.getContact();
-      const nombre = contacto.Pushname || contacto.Nombre || 'Desconocido';
-      Espera guardarEnSheet(nombre, MSG.de, Texto);
+    if (text === 'entrada' || text === 'salida') {
+      const contact = await msg.getContact();
+      const nombre = contact.pushname || contact.name || 'Desconocido';
+      await guardarEnSheet(nombre, msg.from, text);
       
-      si (Texto === 'entrada') {
-        Espera MSG.Respuesta(`Buen día, ${nombre}! Tu ${Texto} registrada.\nGracias!`);
-      } sino {
-        Espera MSG.Respuesta(`Gracias.`);
+      if (text === 'entrada') {
+        await msg.reply(`Buen día, ${nombre}! ☀️\nTu ${text} fue registrada.\nGracias!`);
+      } else {
+        await msg.reply(`Gracias.`);
       }
     }
-  } Atrapa (e) {
-    Consola.Log('Error en mensaje:', e.Mensaje);
-    Consola.Log(e);
+  } catch (e) {
+    console.log('Error:', e.message);
   }
 });
 
