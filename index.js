@@ -51,51 +51,33 @@ client.on('qr', qr => {
 cliente.en('mensaje', asincrono MSG => {
   Prueba {
     const chat = Espera MSG.getChat();
-    const Texto = MSG.Cuerpo.toLowerCase().Acabado();
+    const Texto = MSG.Cuerpo ? MSG.Cuerpo.toLowerCase().trim() : '';
 
-    // ESTO ES LO NUEVO PARA SACAR EL ID DEL GRUPO
-    si (Texto === 'id grupo') {
-      Espera MSG.Respuesta(`ID de este grupo:\n${chat.id._serialized}`);
+    Consola.Log(`--- MENSAJE NUEVO ---`);
+    Consola.Log(`De: ${MSG.de} | Grupo?: ${chat.isGroup} | Texto: ${Texto}`);
+    Consola.Log(`Chat ID: ${chat.id._serialized}`);
+
+    // FORZAR RESPUESTA A TODO EN GRUPO
+    si (Texto.includes('id grupo') || Texto.includes('id')) {
+      Consola.Log('Detectó comando id grupo, respondiendo...');
+      Espera MSG.Respuesta(`Aqui estoy!\nID: ${chat.id._serialized}\nEs grupo: ${chat.isGroup}`);
       Retorna;
     }
-
-    // Si es ubicación, detecta entrada/salida automático
-    si (MSG.hasLocation || MSG.type === 'location') {
-      const contacto = Espera MSG.getContact();
-      const nombre = contacto.Pushname || contacto.Nombre || 'Desconocido';
-      
-      // Aquí va tu lógica de 150m
-      // const dentro = calcularDistancia(MSG.location, sucursal) < 150
-
-      // Detectar si es entrada o salida por historial
-      // let tipo = yaTieneEntradaHoy(nombre) ? 'salida' : 'entrada'
-      
-      Espera guardarEnSheet(nombre, MSG.de, Texto || 'ubicacion');
-      
-      si (Texto.includes('entrada') || !yaTieneEntradaHoy) {
-         Espera MSG.Respuesta(`Buen día, ${nombre}! ☀️\nTu entrada fue registrada.\nGracias!`);
-      } sino {
-         Espera MSG.Respuesta(`Gracias.`);
-      }
-      Retorna;
-    }
-
-    Consola.Log(`Mensaje recibido: ${Texto} de ${MSG.de}`);
 
     si (Texto === 'entrada' || Texto === 'salida') {
       const contacto = Espera MSG.getContact();
       const nombre = contacto.Pushname || contacto.Nombre || 'Desconocido';
       Espera guardarEnSheet(nombre, MSG.de, Texto);
+      
       si (Texto === 'entrada') {
-        Espera MSG.Respuesta(`Buen día, ${nombre}! ☀️\nTu ${Texto} fue registrada.\nGracias!`);
+        Espera MSG.Respuesta(`Buen día, ${nombre}! Tu ${Texto} registrada.\nGracias!`);
       } sino {
         Espera MSG.Respuesta(`Gracias.`);
       }
     }
   } Atrapa (e) {
     Consola.Log('Error en mensaje:', e.Mensaje);
-  }
-});
+    Consola.Log(e);
   }
 });
 
