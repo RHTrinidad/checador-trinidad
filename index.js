@@ -167,7 +167,28 @@ const main = async () => {
     const adapterProvider = createProvider(BaileysProvider);
     
     // 📌 CORRECCIÓN CLAVE DE LA LÍNEA 170: Importación e inicialización directa en una sola línea
-    const adapterDB = new (require('@bot-whatsapp/database/mock'))();
+  const main = async () => {
+    // 1. Inicializar el proveedor oficial de WhatsApp
+    const adapterProvider = createProvider(BaileysProvider);
+    
+    // 📌 SOLUCIÓN DEFINITIVA: Adaptador de memoria nativo sin dependencias externas
+    const { MockAdapter } = require('@bot-whatsapp/bot');
+    const adapterDB = new MockAdapter();
+
+    // 2. Arrancar el ecosistema del bot de forma segura con tus 3 flujos activos
+    createBot({
+        flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
+        provider: adapterProvider,
+        database: adapterDB,
+    });
+
+    // 🚀 PORTAL WEB OFICIAL: Levanta la interfaz interactiva nativa usando el puerto de Railway
+    const { QRPortalWeb } = require('@bot-whatsapp/bot');
+    QRPortalWeb({ port: parseInt(process.env.PORT || '8080') });
+};
+
+// 🏁 Ejecución inicial obligatoria
+main();
 
     // 2. Arrancar el ecosistema del bot de forma segura con tus 3 flujos activos
     createBot({
