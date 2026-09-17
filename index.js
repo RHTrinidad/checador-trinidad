@@ -163,43 +163,46 @@ const flujoRegistrar = addKeyword(['/registrar'])
 
 // 🚀 AHORA SÍ, TU FUNCIÓN MAIN CON EL SERVIDOR WEB QR:
 const main = async () => {
+    // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
     
-    // Variable global temporal para guardar el código QR dinámico
+    // 📌 SOLUCIÓN: Usamos un adaptador de base de datos en memoria (Mock) 
+    // Esto evita que el bot intente escribir en archivos locales y se congele
+    const MockAdapter = require('@bot-whatsapp/database/mock');
+    const adapterDB = new MockAdapter();
+
     let codigoQRRaw = null;
 
-    createBot({
-        flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
-        provider: adapterProvider,
-        database: null,
-    });
-
-    // Capturar el código QR nativo de WhatsApp en cuanto se genere
+    // 2. Capturar el código QR nativo de WhatsApp
     adapterProvider.on('qr', (qr) => {
         codigoQRRaw = qr;
         console.log('📢 ¡Código QR actualizado en memoria para el navegador!');
     });
 
+    // 3. Arrancar el ecosistema del bot con el adaptador en memoria
+    createBot({
+        flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
+        provider: adapterProvider,
+        database: adapterDB, // <-- Cambiado a adapterDB limpio
+    });
+
     // 🌐 SERVIDOR WEB INMUNE A TIMEOUTS
     const http = require('http');
-    const PORT = process.env.PORT || 3000;
+    const PORT = process.env.PORT || 8080;
 
     http.createServer((req, res) => {
-        // Forzar a cualquier ruta (/ o /bot.qr.png) a mostrar la interfaz visual
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
 
         if (!codigoQRRaw) {
-            // Si el bot apenas está encendiendo en Railway, evitamos el error mostrando un mensaje de espera activo
             return res.end(`
                 <div style="text-align: center; font-family: Arial, sans-serif; margin-top: 80px;">
                     <h2>⏳ Conectando con los servidores de WhatsApp...</h2>
-                    <p>El bot se está iniciando en Railway. Esta página se actualizará automáticamente en unos segundos.</p>
-                    <script>setTimeout(() => { location.reload(); }, 5000);</script>
+                    <p>El bot se está iniciando en Railway de forma limpia. Esta página se actualizará automáticamente en unos segundos.</p>
+                    <script>setTimeout(() => { location.reload(); }, 4000);</script>
                 </div>
             `);
         }
 
-        // Si ya hay código QR, lo transformamos en una imagen perfecta usando una API en línea ultra ligera
         const urlImagenQR = `https://qrserver.com{encodeURIComponent(codigoQRRaw)}`;
 
         res.end(`
@@ -210,7 +213,6 @@ const main = async () => {
                 <div style="margin: 30px 0;">
                     <img src="${urlImagenQR}" alt="WhatsApp QR" style="border: 12px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px;" />
                 </div>
-                <p style="color: #666; font-size: 14px;">El código se actualiza automáticamente de forma segura.</p>
                 <script>setTimeout(() => { location.reload(); }, 30000);</script>
             </div>
         `);
