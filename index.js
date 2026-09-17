@@ -167,10 +167,15 @@ const main = async () => {
     const adapterProvider = createProvider(BaileysProvider);
     
     // 📌 CORRECCIÓN CLAVE: Inicialización correcta y nativa de la Base de Datos en memoria
-   const main = async () => {
+ const main = async () => {
     // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
     
+    // 📌 CORRECCIÓN ULTRA IMPORTANTE: Importar directo la subcarpeta de memoria mock
+    const MockAdapter = require('@bot-whatsapp/database/mock');
+    const adapterDB = new MockAdapter();
+
+    let codigoQRRaw = null;    
     // 📌 CORRECCIÓN ULTRA IMPORTANTE: Importar directo la subcarpeta de memoria mock
     const MockAdapter = require('@bot-whatsapp/database/mock');
     const adapterDB = new MockAdapter();
