@@ -163,8 +163,10 @@ const flujoRegistrar = addKeyword(['/registrar'])
 
 // 🚀 AHORA SÍ, TU FUNCIÓN MAIN CON EL SERVIDOR WEB QR:
 const main = async () => {
-    // 1. Inicializar el proveedor Baileys de forma limpia
     const adapterProvider = createProvider(BaileysProvider);
+    
+    // Variable global temporal para guardar el código QR dinámico
+    let codigoQRRaw = null;
 
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
@@ -172,39 +174,54 @@ const main = async () => {
         database: null,
     });
 
-    // 2. 🌐 LEVANTAR EL SERVIDOR DE ARCHIVOS ULTRA LIGERO PARA VER EL QR
+    // Capturar el código QR nativo de WhatsApp en cuanto se genere
+    adapterProvider.on('qr', (qr) => {
+        codigoQRRaw = qr;
+        console.log('📢 ¡Código QR actualizado en memoria para el navegador!');
+    });
+
+    // 🌐 SERVIDOR WEB INMUNE A TIMEOUTS
     const http = require('http');
-    const fs = require('fs');
-    const path = require('path');
     const PORT = process.env.PORT || 3000;
 
     http.createServer((req, res) => {
-        // Responder únicamente cuando entren a la ruta de la imagen /bot.qr.png
-        if (req.url === '/bot.qr.png') {
-            const pathAlQR = path.join(__dirname, 'bot.qr.png');
-            
-            // Validar si la librería ya generó la imagen física en el disco de Railway
-            if (fs.existsSync(pathAlQR)) {
-                res.writeHead(200, { 'Content-Type': 'image/png' });
-                const streamLectura = fs.createReadStream(pathAlQR);
-                streamLectura.pipe(res); // Envía la imagen directo al navegador de forma eficiente
-            } else {
-                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                res.end('<h3>⏳ Generando el primer código QR de WhatsApp... Por favor refresca esta página en 10 segundos.</h3>');
-            }
-        } else {
-            // Cualquier otra ruta redirige automáticamente a la imagen del QR
-            res.writeHead(302, { 'Location': '/bot.qr.png' });
-            res.end();
+        // Forzar a cualquier ruta (/ o /bot.qr.png) a mostrar la interfaz visual
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+
+        if (!codigoQRRaw) {
+            // Si el bot apenas está encendiendo en Railway, evitamos el error mostrando un mensaje de espera activo
+            return res.end(`
+                <div style="text-align: center; font-family: Arial, sans-serif; margin-top: 80px;">
+                    <h2>⏳ Conectando con los servidores de WhatsApp...</h2>
+                    <p>El bot se está iniciando en Railway. Esta página se actualizará automáticamente en unos segundos.</p>
+                    <script>setTimeout(() => { location.reload(); }, 5000);</script>
+                </div>
+            `);
         }
+
+        // Si ya hay código QR, lo transformamos en una imagen perfecta usando una API en línea ultra ligera
+        const urlImagenQR = `https://qrserver.com{encodeURIComponent(codigoQRRaw)}`;
+
+        res.end(`
+            <div style="text-align: center; font-family: Arial, sans-serif; margin-top: 50px;">
+                <h1 style="color: #075E54;">🟢 Control de Asistencia - Trinidad</h1>
+                <h2>📸 Escanea este código QR desde tu celular</h2>
+                <p>Abre WhatsApp > Dispositivos vinculados > Vincular un dispositivo.</p>
+                <div style="margin: 30px 0;">
+                    <img src="${urlImagenQR}" alt="WhatsApp QR" style="border: 12px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px;" />
+                </div>
+                <p style="color: #666; font-size: 14px;">El código se actualiza automáticamente de forma segura.</p>
+                <script>setTimeout(() => { location.reload(); }, 30000);</script>
+            </div>
+        `);
     }).listen(PORT, () => {
-        console.log(`🚀 Servidor web QR operativo en el puerto ${PORT}`);
+        console.log(`🚀 Servidor de contingencia QR activo en el puerto ${PORT}`);
     });
 
-    // Mantener el contenedor despierto
     process.on('SIGTERM', () => {
-        console.log('Manteniendo vivo el proceso en Railway.');
+        console.log('Manteniendo vivo el contenedor.');
     });
 };
 
 main();
+
