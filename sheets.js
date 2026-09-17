@@ -8,7 +8,6 @@ const auth = new google.auth.GoogleAuth({
     credentials: JSON.parse(jsonCredenciales.trim()),
     scopes: ['https://googleapis.com'],
 });
-});
 
 const sheets = google.sheets({ version: 'v4', auth });
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
