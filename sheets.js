@@ -238,14 +238,17 @@ async function obtenerAdministradores() {
         const filas = vistaAdmin.data.values || [];
         // Convertir la matriz bidimensional en una lista plana de strings: ['525512345678', '525587654321']
         return filas.map(fila => fila[0].trim());
-    } catch (error) {
+} catch (error) {
         console.error('Error al obtener administradores desde Sheets:', error);
         return []; // Si hay error, devuelve lista vacía por seguridad
     }
 }
+
+// 🚪 ESTO VA AL FINAL DE TODO EL ARCHIVO:
 module.exports = {
     obtenerHorarioEmpleado,
     guardarAsistencia,
     generarSiguienteSemana,
-    obtenerResumenSemanal
+    obtenerResumenSemanal,
+    obtenerAdministradores
 };
