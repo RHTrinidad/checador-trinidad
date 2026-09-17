@@ -179,8 +179,19 @@ const main = async () => {
 
     // 🚀 PORTAL WEB OFICIAL: Levanta la interfaz interactiva nativa usando el puerto de Railway
     const { QRPortalWeb } = require('@bot-whatsapp/bot');
-    QRPortalWeb({ port: parseInt(process.env.PORT || '8080') });
-};
+   // const QRPortalWeb = require('@bot-whatsapp/portal') // <- BORRA o comenta esta línea
+// QRPortalWeb({ port: parseInt(process.env.PORT || '8080') }); // <- BORRA o comenta esta línea
 
-// 🏁 Ejecución inicial obligatoria
-main();
+const main = async () => {
+    const adapterFlow = createFlow([/* tu flow aquí */])
+    const adapterProvider = createProvider(BaileysProvider)
+    const adapterDB = new MockAdapter() // o el que uses
+
+    createBot({
+        flow: adapterFlow,
+        provider: adapterProvider,
+        database: adapterDB,
+    })
+}
+
+main()
