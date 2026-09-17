@@ -1,4 +1,4 @@
-const { createBot, createProvider, createFlow, addKeyword } = require('@bot-whatsapp/bot');
+const { createBot, createProvider, createFlow, addKeyword, MockAdapter } = require('@bot-whatsapp/bot');
 const BaileysProvider = require('@bot-whatsapp/provider/baileys');
 const cron = require('node-cron');
 
