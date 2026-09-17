@@ -1,23 +1,20 @@
 {
   "name": "whatsapp-asistencia-trinidad",
   "version": "1.0.0",
-  "description": "Bot de control de asistencia para Sucursales Trinidad",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@bot-whatsapp/bot": "^0.1.2",
-    "@bot-whatsapp/provider": "^0.1.2",
-    "@bot-whatsapp/database": "^0.1.2",
-    "@bot-whatsapp/portal": "^0.0.70",
+    "@bot-whatsapp/bot": "latest",
+    "@bot-whatsapp/provider": "latest",
+    "@bot-whatsapp/database": "latest",
+    "@bot-whatsapp/portal": "latest",
     "@whiskeysockets/baileys": "6.6.0",
     "wa-sticker-formatter": "^4.4.4",
-    "pino": "^8.14.0",
-    "pino-pretty": "^10.0.0",
-    "google-auth-library": "^9.0.0",
+    "qrcode-terminal": "^0.12.0",
     "googleapis": "^126.0.0",
-    "node-cron": "^3.0.3",
-    "qrcode-terminal": "^0.12.0"
+    "google-auth-library": "^9.0.0",
+    "node-cron": "^3.0.3"
   }
 }
