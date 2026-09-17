@@ -163,26 +163,33 @@ const flujoRegistrar = addKeyword(['/registrar'])
 
 // 🚀 AHORA SÍ, TU FUNCIÓN MAIN CON EL SERVIDOR WEB QR:
 const main = async () => {
-    // Inicializar el proveedor Baileys de forma limpia
+    // 1. Inicializar el proveedor Baileys de forma limpia
     const adapterProvider = createProvider(BaileysProvider);
 
+    // 2. FORZAR AL PUENTE NATIVO A PINTAR EL QR EN LA TERMINAL (INFAZIBLE)
+    // Extraemos el bus de eventos oficial de Baileys para ganarle a la librería
+    if (adapterProvider.provider && adapterProvider.provider.ev) {
+        adapterProvider.provider.ev.on('connection.update', (update) => {
+            const { qr } = update;
+            if (qr) {
+                console.log('==================================================');
+                console.log('🔥 ¡CÓDIGO QR TOTALMENTE DETECTADO! ESCANEA AQUÍ:');
+                console.log('==================================================');
+                require('qrcode-terminal').generate(qr, { small: true });
+            }
+        });
+    }
+
+    // 3. Arrancar el bot con tus flujos
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
         database: null,
     });
 
-    // 📌 FORZAR LA IMPRESIÓN DEL QR EN LA CONSOLA ANTES DEL REINICIO
-    adapterProvider.on('qr', (qr) => {
-        console.log('==================================================');
-        console.log('📢 ¡CÓDIGO QR GENERADO CON ÉXITO! ESCANEA AHORA:');
-        console.log('==================================================');
-        require('qrcode-terminal').generate(qr, { small: true });
-    });
-
-    // Mantener el proceso de Node.js activamente despierto en entornos Railway
+    // Mantener el contenedor despierto
     process.on('SIGTERM', () => {
-        console.log('⚠️ Recibida señal de apagado, intentando mantener vivo el proceso...');
+        console.log('Manteniendo vivo el proceso en Railway.');
     });
 };
 
