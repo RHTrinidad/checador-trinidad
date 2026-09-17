@@ -166,22 +166,23 @@ const main = async () => {
     // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
     
-    // 2. Inicializar el almacenamiento en memoria RAM
+    // 2. Inicializar la base de datos interna en memoria RAM (Evita bloqueos en la nube)
     const MemoryDB = require('@bot-whatsapp/database');
     const adapterDB = new MemoryDB.MockAdapter();
 
-    // 3. Arrancar el ecosistema del bot de forma segura
+    // 3. Arrancar el ecosistema del bot de forma segura con tus 3 flujos activos
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
         database: adapterDB,
     });
 
-    // 🚀 PORTAL OFICIAL: Levanta la interfaz nativa usando el puerto de Railway
+    // 🚀 PORTAL WEB OFICIAL: Levanta la interfaz interactiva nativa usando el puerto de Railway
     const { QRPortalWeb } = require('@bot-whatsapp/bot');
     QRPortalWeb({ port: parseInt(process.env.PORT || '8080') });
 };
 
-// 🏁 Ejecución obligatoria inicial del bot
+// 🏁 Ejecución inicial obligatoria
 main();
+
 
