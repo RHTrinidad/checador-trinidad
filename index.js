@@ -163,16 +163,18 @@ const flujoRegistrar = addKeyword(['/registrar'])
 
 // 🚀 AHORA SÍ, TU FUNCIÓN MAIN CON EL SERVIDOR WEB QR:
 const main = async () => {
+    // 📌 Configuración limpia del proveedor Baileys
     const adapterProvider = createProvider(BaileysProvider);
-    let ultimoQR = null;
 
     createBot({
-        flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]), // <-- Aquí ya no dará error
+        flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
         database: null,
     });
 
-    // ... (El resto del código del servidor HTTP y la escucha del puerto)
+    // 🔥 SOLUCIÓN DIRECTA: Escuchar el evento del QR y dibujarlo en la pantalla de Railway
+    adapterProvider.on('qr', (qr) => {
+        console.log('📢 ¡NUEVO CÓDIGO QR GENERADO! ESCANEA AQUÍ ABAJO:');
+        require('qrcode-terminal').generate(qr, { small: true });
+    });
 };
-
-main();
