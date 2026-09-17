@@ -137,7 +137,7 @@ const main = async () => {
 
         try {
         const QRPortalWeb = require('@bot-whatsapp/portal');
-        QRPortalWeb({ port: process.env.PORT || 8080 });
+     QRPortalWeb()
     } catch(e){}
     
     createBot({
