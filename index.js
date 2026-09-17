@@ -166,82 +166,22 @@ const main = async () => {
     // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
     
-    const MockAdapter = require('@bot-whatsapp/database/mock');
-    const adapterDB = new MockAdapter();
+    // 2. Inicializar el almacenamiento en memoria RAM
+    const MemoryDB = require('@bot-whatsapp/database');
+    const adapterDB = new MemoryDB.MockAdapter();
 
-    let codigoQRRaw = null;
-
-    // 🔥 SOLUCIÓN DEFINITIVA: Forzar la extracción del código QR desde el objeto global de la librería
-    adapterProvider.on('qr', (qr) => {
-        codigoQRRaw = qr;
-        console.log('✅ ¡Código QR atrapado en el evento principal!');
-    });
-
-    // 🚀 RESPALDO DIRECTO: Forzar lectura del archivo local si la librería bloquea el evento
-    setInterval(() => {
-        try {
-            const fs = require('fs');
-            const path = require('path');
-            const pathAlQR = path.join(__dirname, 'bot.qr.png');
-            
-            // Si la librería ya generó la imagen física pero el navegador sigue esperando,
-            // leemos el token directamente del proveedor para pintar la URL
-            if (fs.existsSync(pathAlQR) && !codigoQRRaw) {
-                if (adapterProvider.provider && adapterProvider.provider.qrCode) {
-                    codigoQRRaw = adapterProvider.provider.qrCode;
-                }
-            }
-        } catch (e) {
-            console.log('Esperando inicialización del archivo...');
-        }
-    }, 4000);
-
-    // 2. Arrancar el ecosistema del bot de forma segura
+    // 3. Arrancar el ecosistema del bot de forma segura
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
         database: adapterDB,
     });
 
-    // 🌐 SERVIDOR WEB INMUNE A TIMEOUTS
-    const http = require('http');
-    const PORT = process.env.PORT || 8080;
-
-    http.createServer((req, res) => {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-
-        if (!codigoQRRaw) {
-            return res.end(`
-                <div style="text-align: center; font-family: Arial, sans-serif; margin-top: 80px;">
-                    <h2>⏳ Conectando con los servidores de WhatsApp...</h2>
-                    <p>El bot se está iniciando en Railway de forma limpia. Esta página se actualizará automáticamente en unos segundos.</p>
-                    <script>setTimeout(() => { location.reload(); }, 4000);</script>
-                </div>
-            `);
-        }
-
-        // Convertir el texto dinámico en imagen nítida usando la API de Google
-        const urlImagenQR = `https://googleapis.com{encodeURIComponent(codigoQRRaw)}`;
-
-        res.end(`
-            <div style="text-align: center; font-family: Arial, sans-serif; margin-top: 50px;">
-                <h1 style="color: #075E54;">🟢 Control de Asistencia - Trinidad</h1>
-                <h2>📸 Escanea este código QR desde tu celular</h2>
-                <p>Abre WhatsApp > Dispositivos vinculados > Vincular un dispositivo.</p>
-                <div style="margin: 30px 0;">
-                    <img src="${urlImagenQR}" alt="WhatsApp QR" style="border: 12px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px;" />
-                </div>
-                <p style="color: #666; font-size: 14px;">El sistema está listo. Vincula tu cuenta para comenzar a checar.</p>
-                <script>setTimeout(() => { location.reload(); }, 20000);</script>
-            </div>
-        `);
-    }).listen(PORT, () => {
-        console.log(`🚀 Servidor de contingencia QR activo en el puerto ${PORT}`);
-    });
-
-    process.on('SIGTERM', () => {
-        console.log('Manteniendo vivo el contenedor.');
-    });
+    // 🚀 PORTAL OFICIAL: Levanta la interfaz nativa usando el puerto de Railway
+    const { QRPortalWeb } = require('@bot-whatsapp/bot');
+    QRPortalWeb({ port: parseInt(process.env.PORT || '8080') });
 };
 
+// 🏁 Ejecución obligatoria inicial del bot
 main();
+
