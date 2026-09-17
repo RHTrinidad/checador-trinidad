@@ -116,10 +116,57 @@ cron.schedule('0 7 * * 1', async (provider) => {
 
 const main = async () => {
     const adapterProvider = createProvider(BaileysProvider);
+    
+    // Guardaremos el último código QR generado en esta variable
+    let ultimoQR = null;
+
     createBot({
-        flow: createFlow([flujoEntrada, flujoSalida]),
+        flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
         database: null,
     });
+
+    // Capturar el código de WhatsApp cada vez que se actualiza
+    adapterProvider.on('qr', (qr) => {
+        ultimoQR = qr;
+        // Imprime el enlace directo en los Logs de Railway para que solo le des clic
+        const urlServidor = process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : `Puerto: ${process.env.PORT || 3000}`;
+        console.log(`🔗 El código QR se actualizó. Míralo en vivo aquí: ${urlServidor}/qr`);
+    });
+
+    // 🌐 CREAR UN SERVIDOR WEB INTERNO PARA VER EL QR EN EL NAVEGADOR
+    const http = require('http');
+    const PORT = process.env.PORT || 3000;
+
+    http.createServer((req, reqUrl) => {
+        const url = new URL(reqUrl, `http://${req.headers.host}`);
+        
+        if (url.pathname === '/qr') {
+            if (!ultimoQR) {
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                return res.end('<h1>⏳ Generando código QR... Por favor refresca la página en 5 segundos.</h1>');
+            }
+            // Usamos una API gratuita que convierte el texto de WhatsApp en una imagen perfecta
+            const qrImageUrl = `https://qrserver.com{encodeURIComponent(ultimoQR)}`;
+            
+            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(`
+                <div style="text-align: center; font-family: Arial, sans-serif; margin-top: 50px;">
+                    <h2>📸 Escanea este código QR con tu WhatsApp</h2>
+                    <p>Recuerda que cambia cada minuto para mantener la seguridad.</p>
+                    <div style="margin: 20px 0;">
+                        <img src="${qrImageUrl}" alt="WhatsApp QR Code" style="border: 10px solid white; box-shadow: 0 4px 8px rgba(0,0,0,0.2);" />
+                    </div>
+                    <p style="color: #666;">Control de Asistencia - Trinidad</p>
+                </div>
+            `);
+        } else {
+            res.writeHead(404);
+            res.end();
+        }
+    }).listen(PORT, () => {
+        console.log(`🚀 Servidor de visualización QR activo en el puerto ${PORT}`);
+    });
 };
+
 main();
