@@ -128,18 +128,15 @@ cron.schedule('0 23 * * 6', async () => {
 
 // --- MAIN ---
 const main = async () => {
-    const QRPortalWeb = require('@bot-whatsapp/portal')
-    QRPortalWeb({ port: 8080 })
+    try {
+        const QRPortalWeb = require('@bot-whatsapp/portal');
+        QRPortalWeb({ port: process.env.PORT })
+    } catch(e){}
 
     const adapterDB = new MockAdapter();
     const adapterFlow = createFlow([flujoEntrada, flujoSalida, flujoRegistrar]);
     const adapterProvider = createProvider(BaileysProvider);
 
-        try {
-        const QRPortalWeb = require('@bot-whatsapp/portal');
-     QRPortalWeb()
-    } catch(e){}
-    
     createBot({
         flow: adapterFlow,
         provider: adapterProvider,
