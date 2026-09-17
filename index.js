@@ -163,33 +163,28 @@ const flujoRegistrar = addKeyword(['/registrar'])
 
 // 🚀 AHORA SÍ, TU FUNCIÓN MAIN CON EL SERVIDOR WEB QR:
 const main = async () => {
-    // 1. Inicializar el proveedor Baileys de forma limpia
+    // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
 
-    // 2. FORZAR AL PUENTE NATIVO A PINTAR EL QR EN LA TERMINAL (INFAZIBLE)
-    // Extraemos el bus de eventos oficial de Baileys para ganarle a la librería
-    if (adapterProvider.provider && adapterProvider.provider.ev) {
-        adapterProvider.provider.ev.on('connection.update', (update) => {
-            const { qr } = update;
-            if (qr) {
-                console.log('==================================================');
-                console.log('🔥 ¡CÓDIGO QR TOTALMENTE DETECTADO! ESCANEA AQUÍ:');
-                console.log('==================================================');
-                require('qrcode-terminal').generate(qr, { small: true });
-            }
-        });
-    }
+    // 2. ESCUCHAR EL QR Y CONVERTIRLO EN LINK DE TEXTO PLANO
+    adapterProvider.on('qr', (qr) => {
+        console.log('==================================================');
+        console.log('📢 ¡NUEVO CÓDIGO QR DETECTADO!');
+        console.log('Copia el siguiente enlace y pégalo en tu navegador para ver la imagen:');
+        console.log(`👉 https://qrserver.com{encodeURIComponent(qr)} 👈`);
+        console.log('==================================================');
+    });
 
-    // 3. Arrancar el bot con tus flujos
+    // 3. Arrancar el ecosistema del bot con tus flujos
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
         database: null,
     });
 
-    // Mantener el contenedor despierto
+    // Evitar suspensiones automáticas en Railway
     process.on('SIGTERM', () => {
-        console.log('Manteniendo vivo el proceso en Railway.');
+        console.log('Manteniendo el contenedor despierto.');
     });
 };
 
