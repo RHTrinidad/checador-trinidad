@@ -114,59 +114,65 @@ cron.schedule('0 7 * * 1', async (provider) => {
     await provider.sendMessage(grupoReportesId, reporte);
 });
 
+// 📌 PEGA ESTO JUSTO AQUÍ (ANTES DEL MAIN):
+const flujoRegistrar = addKeyword(['/registrar'])
+    .addAction(async (ctx, { flowDynamic }) => {
+        const listaAdministradores = await obtenerAdministradores(); 
+
+        if (!listaAdministradores.includes(ctx.from)) {
+            return await flowDynamic('❌ No tienes permisos de administrador en el sistema para realizar registros.');
+        }
+
+        const partes = ctx.body.split(' ');
+        if (partes.length < 5) {
+            return await flowDynamic('⚠️ Formato incorrecto. Usa: `/registrar [Teléfono] [Nombre] [Sucursal (Coyoacan o Bucareli)]`');
+        }
+
+        const telefonoEmpleado = partes[1];
+        const sucursalTexto = ctx.body.toLowerCase().includes('bucareli') ? 'Trinidad Bucareli' : 'Trinidad Coyoacan';
+        
+        const nombreEmpleado = ctx.body
+            .replace(`/registrar ${telefonoEmpleado} `, '')
+            .replace(/trinidad coyoacan/i, '')
+            .replace(/trinidad bucareli/i, '')
+            .replace(/coyoacan/i, '')
+            .replace(/bucareli/i, '')
+            .trim();
+
+        const coords = SUCURSALES[sucursalTexto];
+
+        const { google } = require('googleapis');
+        const auth = new google.auth.GoogleAuth({
+            credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '{}'),
+            scopes: ['https://googleapis.com'],
+        });
+        const sheets = google.sheets({ version: 'v4', auth });
+
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: process.env.SPREADSHEET_ID,
+            range: 'Empleados!A2',
+            valueInputOption: 'USER_ENTERED',
+            resource: { 
+                values: [[telefonoEmpleado, nombreEmpleado, sucursalTexto, coords.lat, coords.lng, 'Lunes']] 
+            },
+        });
+
+        await flowDynamic(`👤 *¡Empleado Registrado!*\n• Nombre: ${nombreEmpleado}\n• Tel: ${telefonoEmpleado}\n• Unidad: ${sucursalTexto}\n\nPermisos validados correctamente desde la nube.`);
+    });
+
+
+// 🚀 AHORA SÍ, TU FUNCIÓN MAIN CON EL SERVIDOR WEB QR:
 const main = async () => {
     const adapterProvider = createProvider(BaileysProvider);
-    
-    // Guardaremos el último código QR generado en esta variable
     let ultimoQR = null;
 
     createBot({
-        flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
+        flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]), // <-- Aquí ya no dará error
         provider: adapterProvider,
         database: null,
     });
 
-    // Capturar el código de WhatsApp cada vez que se actualiza
-    adapterProvider.on('qr', (qr) => {
-        ultimoQR = qr;
-        // Imprime el enlace directo en los Logs de Railway para que solo le des clic
-        const urlServidor = process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : `Puerto: ${process.env.PORT || 3000}`;
-        console.log(`🔗 El código QR se actualizó. Míralo en vivo aquí: ${urlServidor}/qr`);
-    });
-
-    // 🌐 CREAR UN SERVIDOR WEB INTERNO PARA VER EL QR EN EL NAVEGADOR
-    const http = require('http');
-    const PORT = process.env.PORT || 3000;
-
-    http.createServer((req, reqUrl) => {
-        const url = new URL(reqUrl, `http://${req.headers.host}`);
-        
-        if (url.pathname === '/qr') {
-            if (!ultimoQR) {
-                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-                return res.end('<h1>⏳ Generando código QR... Por favor refresca la página en 5 segundos.</h1>');
-            }
-            // Usamos una API gratuita que convierte el texto de WhatsApp en una imagen perfecta
-            const qrImageUrl = `https://qrserver.com{encodeURIComponent(ultimoQR)}`;
-            
-            res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(`
-                <div style="text-align: center; font-family: Arial, sans-serif; margin-top: 50px;">
-                    <h2>📸 Escanea este código QR con tu WhatsApp</h2>
-                    <p>Recuerda que cambia cada minuto para mantener la seguridad.</p>
-                    <div style="margin: 20px 0;">
-                        <img src="${qrImageUrl}" alt="WhatsApp QR Code" style="border: 10px solid white; box-shadow: 0 4px 8px rgba(0,0,0,0.2);" />
-                    </div>
-                    <p style="color: #666;">Control de Asistencia - Trinidad</p>
-                </div>
-            `);
-        } else {
-            res.writeHead(404);
-            res.end();
-        }
-    }).listen(PORT, () => {
-        console.log(`🚀 Servidor de visualización QR activo en el puerto ${PORT}`);
-    });
+    // ... (El resto del código del servidor HTTP y la escucha del puerto)
 };
 
 main();
