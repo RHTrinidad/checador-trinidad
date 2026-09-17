@@ -132,6 +132,11 @@ const main = async () => {
     const adapterFlow = createFlow([flujoEntrada, flujoSalida, flujoRegistrar]);
     const adapterProvider = createProvider(BaileysProvider);
 
+        try {
+        const QRPortalWeb = require('@bot-whatsapp/portal');
+        QRPortalWeb({ port: process.env.PORT || 8080 });
+    } catch(e){}
+    
     createBot({
         flow: adapterFlow,
         provider: adapterProvider,
