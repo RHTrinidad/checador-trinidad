@@ -9,7 +9,7 @@
   "dependencies": {
     "@bot-whatsapp/bot": "^0.1.2",
     "@bot-whatsapp/provider": "^0.1.2",
-    "@whiskeysockets/baileys": "^6.5.0",
+    "@whiskeysockets/baileys": "6.1.1",
     "wa-sticker-formatter": "^4.4.4",
     "pino": "^8.14.0",
     "pino-pretty": "^10.0.0",
