@@ -1,9 +1,13 @@
 const { google } = require('googleapis');
 
 // Configuración de autenticación con Google API a través de variables de entorno de Railway
+// Configuración de autenticación mejorada con manejo de errores integrados
+const jsonCredenciales = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || process.env.GOOGLE_CREDS || "{}";
+
 const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
+    credentials: JSON.parse(jsonCredenciales.trim()),
     scopes: ['https://googleapis.com'],
+});
 });
 
 const sheets = google.sheets({ version: 'v4', auth });
