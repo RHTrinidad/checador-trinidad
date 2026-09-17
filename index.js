@@ -168,7 +168,15 @@ const main = async () => {
     
     // 📌 SOLUCIÓN: Usamos un adaptador de base de datos en memoria (Mock) 
     // Esto evita que el bot intente escribir en archivos locales y se congele
-    const MockAdapter = require('@bot-whatsapp/database/mock');
+ const main = async () => {
+    // 1. Inicializar el proveedor oficial de WhatsApp
+    const adapterProvider = createProvider(BaileysProvider);
+    
+    // 📌 CORRECCIÓN DE LA LÍNEA 171: Importación correcta del adaptador en memoria
+    const MockAdapter = require('@bot-whatsapp/database');
+    const adapterDB = new MockAdapter();
+
+    let codigoQRRaw = null;
     const adapterDB = new MockAdapter();
 
     let codigoQRRaw = null;
