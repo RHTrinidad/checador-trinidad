@@ -163,43 +163,47 @@ const flujoRegistrar = addKeyword(['/registrar'])
 
 // 🚀 AHORA SÍ, TU FUNCIÓN MAIN CON EL SERVIDOR WEB QR:
 const main = async () => {
-    // 1. Inicializar el proveedor oficial de WhatsApp
+    // 1. Inicializar el proveedor Baileys de forma limpia
     const adapterProvider = createProvider(BaileysProvider);
 
-    // 2. FORZAR LA DETECCIÓN DIRECTA DESDE EL CLIENTE INTERNO DE BAILEYS
-    adapterProvider.on('qr', (qr) => {
-        console.log('==================================================');
-        console.log('📢 ¡NUEVO CÓDIGO QR DETECTADO EN VIVO!');
-        console.log('Copia el siguiente enlace y pégalo en tu navegador para ver la imagen:');
-        console.log(`👉 https://qrserver.com{encodeURIComponent(qr)} 👈`);
-        console.log('==================================================');
-    });
-
-    // 3. RESPALDO ABSOLUTO: Si la librería se adueña del evento, lo pescamos del socket directo
-    setTimeout(() => {
-        if (adapterProvider.vendor && adapterProvider.vendor.ev) {
-            adapterProvider.vendor.ev.on('connection.update', (update) => {
-                const { qr } = update;
-                if (qr) {
-                    console.log('==================================================');
-                    console.log('🔥 [RESPALDO] ¡CÓDIGO QR CAPTURADO DESDE EL SOCKET!');
-                    console.log(`👉 https://qrserver.com{encodeURIComponent(qr)} 👈`);
-                    console.log('==================================================');
-                }
-            });
-        }
-    }, 5000); // Esperar 5 segundos a que el proveedor se monte en Railway
-
-    // 4. Arrancar el ecosistema del bot con tus flujos
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
         database: null,
     });
 
-    // Evitar suspensiones automáticas en Railway
+    // 2. 🌐 LEVANTAR EL SERVIDOR DE ARCHIVOS ULTRA LIGERO PARA VER EL QR
+    const http = require('http');
+    const fs = require('fs');
+    const path = require('path');
+    const PORT = process.env.PORT || 3000;
+
+    http.createServer((req, res) => {
+        // Responder únicamente cuando entren a la ruta de la imagen /bot.qr.png
+        if (req.url === '/bot.qr.png') {
+            const pathAlQR = path.join(__dirname, 'bot.qr.png');
+            
+            // Validar si la librería ya generó la imagen física en el disco de Railway
+            if (fs.existsSync(pathAlQR)) {
+                res.writeHead(200, { 'Content-Type': 'image/png' });
+                const streamLectura = fs.createReadStream(pathAlQR);
+                streamLectura.pipe(res); // Envía la imagen directo al navegador de forma eficiente
+            } else {
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end('<h3>⏳ Generando el primer código QR de WhatsApp... Por favor refresca esta página en 10 segundos.</h3>');
+            }
+        } else {
+            // Cualquier otra ruta redirige automáticamente a la imagen del QR
+            res.writeHead(302, { 'Location': '/bot.qr.png' });
+            res.end();
+        }
+    }).listen(PORT, () => {
+        console.log(`🚀 Servidor web QR operativo en el puerto ${PORT}`);
+    });
+
+    // Mantener el contenedor despierto
     process.on('SIGTERM', () => {
-        console.log('Manteniendo el contenedor despierto.');
+        console.log('Manteniendo vivo el proceso en Railway.');
     });
 };
 
