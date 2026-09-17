@@ -10,6 +10,7 @@
     "@bot-whatsapp/bot": "^0.1.2",
     "@bot-whatsapp/provider": "^0.1.2",
     "@bot-whatsapp/database": "^0.1.2",
+    "@bot-whatsapp/portal": "^0.0.70",
     "@whiskeysockets/baileys": "6.6.0",
     "wa-sticker-formatter": "^4.4.4",
     "pino": "^8.14.0",
