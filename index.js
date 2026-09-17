@@ -163,22 +163,40 @@ const flujoRegistrar = addKeyword(['/registrar'])
 
 // 🚀 AHORA SÍ, TU FUNCIÓN MAIN CON EL SERVIDOR WEB QR:
 const main = async () => {
-    // 1. Inicializar el proveedor Baileys de forma limpia
+    // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
     
-    // 📌 Conexión directa y simplificada a la base de datos nativa
     const MockAdapter = require('@bot-whatsapp/database/mock');
     const adapterDB = new MockAdapter();
 
     let codigoQRRaw = null;
 
-    // 2. Capturar el código QR nativo de WhatsApp
+    // 🔥 SOLUCIÓN DEFINITIVA: Forzar la extracción del código QR desde el objeto global de la librería
     adapterProvider.on('qr', (qr) => {
         codigoQRRaw = qr;
-        console.log('📢 ¡Código QR actualizado en memoria para el navegador!');
+        console.log('✅ ¡Código QR atrapado en el evento principal!');
     });
 
-    // 3. Arrancar el ecosistema del bot de forma segura
+    // 🚀 RESPALDO DIRECTO: Forzar lectura del archivo local si la librería bloquea el evento
+    setInterval(() => {
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            const pathAlQR = path.join(__dirname, 'bot.qr.png');
+            
+            // Si la librería ya generó la imagen física pero el navegador sigue esperando,
+            // leemos el token directamente del proveedor para pintar la URL
+            if (fs.existsSync(pathAlQR) && !codigoQRRaw) {
+                if (adapterProvider.provider && adapterProvider.provider.qrCode) {
+                    codigoQRRaw = adapterProvider.provider.qrCode;
+                }
+            }
+        } catch (e) {
+            console.log('Esperando inicialización del archivo...');
+        }
+    }, 4000);
+
+    // 2. Arrancar el ecosistema del bot de forma segura
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
@@ -202,7 +220,8 @@ const main = async () => {
             `);
         }
 
-        const urlImagenQR = `https://qrserver.com{encodeURIComponent(codigoQRRaw)}`;
+        // Convertir el texto dinámico en imagen nítida usando la API de Google
+        const urlImagenQR = `https://googleapis.com{encodeURIComponent(codigoQRRaw)}`;
 
         res.end(`
             <div style="text-align: center; font-family: Arial, sans-serif; margin-top: 50px;">
@@ -212,7 +231,8 @@ const main = async () => {
                 <div style="margin: 30px 0;">
                     <img src="${urlImagenQR}" alt="WhatsApp QR" style="border: 12px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px;" />
                 </div>
-                <script>setTimeout(() => { location.reload(); }, 30000);</script>
+                <p style="color: #666; font-size: 14px;">El sistema está listo. Vincula tu cuenta para comenzar a checar.</p>
+                <script>setTimeout(() => { location.reload(); }, 20000);</script>
             </div>
         `);
     }).listen(PORT, () => {
@@ -224,5 +244,4 @@ const main = async () => {
     });
 };
 
-// Ejecución obligatoria inicial del bot
 main();
