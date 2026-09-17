@@ -163,7 +163,7 @@ const flujoRegistrar = addKeyword(['/registrar'])
 
 // 🚀 AHORA SÍ, TU FUNCIÓN MAIN CON EL SERVIDOR WEB QR:
 const main = async () => {
-    // Inicializar el proveedor oficial de WhatsApp (Baileys)
+    // Inicializar el proveedor Baileys de forma limpia
     const adapterProvider = createProvider(BaileysProvider);
 
     createBot({
@@ -172,12 +172,18 @@ const main = async () => {
         database: null,
     });
 
-    // 📌 PINTAR EL QR DIRECTO EN ESTA PANTALLA NEGRA
+    // 📌 FORZAR LA IMPRESIÓN DEL QR EN LA CONSOLA ANTES DEL REINICIO
     adapterProvider.on('qr', (qr) => {
-        console.log('📢 ¡NUEVO CÓDIGO QR GENERADO! ESCANEA AQUÍ ABAJO:');
+        console.log('==================================================');
+        console.log('📢 ¡CÓDIGO QR GENERADO CON ÉXITO! ESCANEA AHORA:');
+        console.log('==================================================');
         require('qrcode-terminal').generate(qr, { small: true });
+    });
+
+    // Mantener el proceso de Node.js activamente despierto en entornos Railway
+    process.on('SIGTERM', () => {
+        console.log('⚠️ Recibida señal de apagado, intentando mantener vivo el proceso...');
     });
 };
 
-// Ejecución inicial del bot
 main();
