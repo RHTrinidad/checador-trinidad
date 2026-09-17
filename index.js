@@ -166,32 +166,23 @@ const main = async () => {
     // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
     
-    // 📌 SOLUCIÓN: Usamos un adaptador de base de datos en memoria (Mock) 
-    // Esto evita que el bot intente escribir en archivos locales y se congele
- const main = async () => {
-    // 1. Inicializar el proveedor oficial de WhatsApp
-    const adapterProvider = createProvider(BaileysProvider);
-    
-    // 📌 CORRECCIÓN DE LA LÍNEA 171: Importación correcta del adaptador en memoria
-    const MockAdapter = require('@bot-whatsapp/database');
-    const adapterDB = new MockAdapter();
-
-    let codigoQRRaw = null;
-    const adapterDB = new MockAdapter();
+    // 📌 CORRECCIÓN CLAVE: Inicialización correcta y nativa de la Base de Datos en memoria
+    const MemoryDB = require('@bot-whatsapp/database');
+    const adapterDB = new MemoryDB.MockAdapter();
 
     let codigoQRRaw = null;
 
-    // 2. Capturar el código QR nativo de WhatsApp
+    // 2. Capturar el código QR nativo de WhatsApp en tiempo real
     adapterProvider.on('qr', (qr) => {
         codigoQRRaw = qr;
         console.log('📢 ¡Código QR actualizado en memoria para el navegador!');
     });
 
-    // 3. Arrancar el ecosistema del bot con el adaptador en memoria
+    // 3. Arrancar el ecosistema del bot de forma segura
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
-        database: adapterDB, // <-- Cambiado a adapterDB limpio
+        database: adapterDB,
     });
 
     // 🌐 SERVIDOR WEB INMUNE A TIMEOUTS
@@ -202,15 +193,17 @@ const main = async () => {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
 
         if (!codigoQRRaw) {
+            // Mensaje de espera interactivo si el bot apenas se está conectando a Meta/Baileys
             return res.end(`
                 <div style="text-align: center; font-family: Arial, sans-serif; margin-top: 80px;">
                     <h2>⏳ Conectando con los servidores de WhatsApp...</h2>
-                    <p>El bot se está iniciando en Railway de forma limpia. Esta página se actualizará automáticamente en unos segundos.</p>
+                    <p>El bot se está iniciando de forma limpia en Railway. Esta página se actualizará automáticamente en unos segundos.</p>
                     <script>setTimeout(() => { location.reload(); }, 4000);</script>
                 </div>
             `);
         }
 
+        // Convertir el texto dinámico de WhatsApp en una imagen QR perfecta
         const urlImagenQR = `https://qrserver.com{encodeURIComponent(codigoQRRaw)}`;
 
         res.end(`
@@ -234,4 +227,3 @@ const main = async () => {
 };
 
 main();
-
