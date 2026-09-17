@@ -1,4 +1,4 @@
-const { createBot, createProvider, createFlow, addKeyword, MockAdapter } = require('@bot-whatsapp/bot');
+const { createBot, createProvider, createFlow, addKeyword } = require('@bot-whatsapp/bot');
 const BaileysProvider = require('@bot-whatsapp/provider/baileys');
 const cron = require('node-cron');
 
@@ -166,11 +166,12 @@ const main = async () => {
     // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
     
-    // 📌 CORRECCIÓN: Inicialización directa usando la exportación nativa de la primera línea
-    const adapterDB = new MockAdapter();
+    // 📌 CORRECCIÓN CLAVE DE LA LÍNEA 170: Importación e inicialización directa en una sola línea
+    const adapterDB = new (require('@bot-whatsapp/database/mock'))();
 
     // 2. Arrancar el ecosistema del bot de forma segura con tus 3 flujos activos
     createBot({
+
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
         database: adapterDB,
