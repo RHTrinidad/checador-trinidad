@@ -166,11 +166,10 @@ const main = async () => {
     // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
     
-    // 2. Inicializar la base de datos interna en memoria RAM (Evita bloqueos en la nube)
-    const MemoryDB = require('@bot-whatsapp/database');
-    const adapterDB = new MemoryDB.MockAdapter();
+    // 📌 CORRECCIÓN: Inicialización directa usando la exportación nativa de la primera línea
+    const adapterDB = new MockAdapter();
 
-    // 3. Arrancar el ecosistema del bot de forma segura con tus 3 flujos activos
+    // 2. Arrancar el ecosistema del bot de forma segura con tus 3 flujos activos
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
@@ -184,5 +183,6 @@ const main = async () => {
 
 // 🏁 Ejecución inicial obligatoria
 main();
+
 
 
