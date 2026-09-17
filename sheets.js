@@ -225,6 +225,24 @@ async function obtenerResumenSemanal() {
     }
 }
 
+/**
+ * Consulta la pestaña 'Administradores' y devuelve una lista con los números autorizados.
+ */
+async function obtenerAdministradores() {
+    try {
+        const vistaAdmin = await sheets.spreadsheets.values.get({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'Administradores!A2:A', // Lee únicamente la columna de teléfonos
+        });
+
+        const filas = vistaAdmin.data.values || [];
+        // Convertir la matriz bidimensional en una lista plana de strings: ['525512345678', '525587654321']
+        return filas.map(fila => fila[0].trim());
+    } catch (error) {
+        console.error('Error al obtener administradores desde Sheets:', error);
+        return []; // Si hay error, devuelve lista vacía por seguridad
+    }
+}
 module.exports = {
     obtenerHorarioEmpleado,
     guardarAsistencia,
