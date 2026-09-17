@@ -184,7 +184,7 @@ async function obtenerResumenSemanal() {
 
         // Procesar fila por fila mapeando por empleado
         filas.forEach(fila => {
-            const [telefono, nombre, , entrada, estatus, , salida, distancia fuera] = fila;
+            const [telefono, nombre, , entrada, estatus, , salida, distancia, fuera] = fila;
             if (!resumen[telefono]) {
                 resumen[telefono] = { nombre, horasTrabajadas: 0, retardos: 0, fueraRango: 0 };
             }
