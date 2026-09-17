@@ -4,9 +4,9 @@ const MockAdapter = require('@bot-whatsapp/database/mock');
 const cron = require('node-cron');
 
 const { SUCURSALES, REGLAS } = require('./config');
-const { guardarAsistencia, obtenerHorarioEmpleado, generarSiguienteSemana, obtenerResumenSemanal } = require('./sheets');
+const { guardarAsistencia, obtenerHorarioEmpleado, generarSiguienteSemana } = require('./sheets');
 
-// --- FÓRMULA DE DISTANCIA (HAVERSINE) ---
+// --- FÓRMULA DE DISTANCIA ---
 function calcularDistancia(lat1, lon1, lat2, lon2) {
     const R = 6371000;
     const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -25,24 +25,80 @@ function obtenerFechaLaboralActual() {
     return ahora.toISOString().split('T')[0];
 }
 
+async function registrarPendiente(telefono, nombrePush) {
+    try {
+        const { google } = require('googleapis');
+        let creds = process.env.GOOGLE_CREDS || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+        try { creds = JSON.parse(creds); } catch(e){}
+        if(typeof creds === 'string'){ try{ creds = JSON.parse(creds); }catch(e){} }
+        const auth = new google.auth.GoogleAuth({
+            credentials: creds,
+            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
+        const sheets = google.sheets({ version: 'v4', auth });
+        const sheetId = process.env.SHEET_ID || process.env.SPREADSHEET_ID;
+        await sheets.spreadsheets.values.append({
+            spreadsheetId: sheetId,
+            range: 'Empleados!A2',
+            valueInputOption: 'USER_ENTERED',
+            resource: {
+              values: [[telefono, `PENDIENTE - ${nombrePush || telefono}`, 'Trinidad Coyoacan']]
+            },
+        });
+        console.log(`Empleado pendiente registrado: ${telefono}`);
+        return true;
+    } catch(e) {
+        console.log('Error registro pendiente:', e.message);
+        return false;
+    }
+}
+
+// --- FLUJO BIENVENIDA ---
+const flujoBienvenida = addKeyword(['hola', 'ola', 'buenos dias', 'buenas', 'menu', 'ayuda', 'hi', 'inicio'], { sensitive: false })
+  .addAnswer([
+      '👋 *Hola, soy Checadora Trinidad*',
+      '',
+      'Escribe:',
+      '👉 *entrada* - Para registrar tu entrada',
+      '👉 *salida* - Para registrar tu salida',
+      '',
+      'Si eres admin: */registrar 5255... Nombre Sucursal*'
+   ].join('\n'));
+
+// --- FLUJO ENTRADA ---
 const flujoEntrada = addKeyword([/^(entrada|entre|entrar|etrada|endrada)$/i], { regex: true })
-   .addAnswer('📍 Por favor, comparte tu **Ubicación en tiempo real** o actual para registrar tu entrada.')
-   .addAction({ capture: true }, async (ctx, { flowDynamic, fallBack }) => {
+  .addAnswer('📍 Por favor, comparte tu *Ubicación* para registrar tu entrada.')
+  .addAction({ capture: true }, async (ctx, { flowDynamic, fallBack }) => {
         if (!ctx.message?.locationMessage) {
-            return fallBack('⚠️ Envío inválido. Debes presionar el clip en WhatsApp y seleccionar "Ubicación".');
+            return fallBack('⚠️ Envío inválido. Presiona el clip 📎 > Ubicación > Enviar ubicación actual.');
         }
         const lat = ctx.message.locationMessage.degreesLatitude;
         const lng = ctx.message.locationMessage.degreesLongitude;
         const telefono = ctx.from;
         const fechaLaboral = obtenerFechaLaboralActual();
-        const empleado = await obtenerHorarioEmpleado(telefono, fechaLaboral);
-        if (!empleado) return await flowDynamic('❌ No estás registrado en el sistema.');
+
+        let empleado = await obtenerHorarioEmpleado(telefono, fechaLaboral);
+
+        // AUTO-REGISTRO SI NO EXISTE
+        if (!empleado) {
+            await registrarPendiente(telefono, ctx.pushName);
+            empleado = {
+                nombre: `PENDIENTE ${telefono.slice(-4)}`,
+                sucursalAsignada: 'Trinidad Coyoacan',
+                horaEsperada: null
+            };
+            // Avisamos pero dejamos que cheche
+            await flowDynamic(`⚠️ Tu número *${telefono}* no estaba registrado.\nLo guardé como *PENDIENTE POR ACTUALIZAR* en la hoja.\n\nSigo con tu registro de entrada...`);
+        }
+
         const sucursal = SUCURSALES[empleado.sucursalAsignada];
         if (!sucursal) return await flowDynamic('❌ Sucursal no identificada.');
+
         const distancia = calcularDistancia(lat, lng, sucursal.lat, sucursal.lng);
         if (distancia > REGLAS.DISTANCIA_MAX_ENTRADA_M) {
-            return await flowDynamic('❌ *La entrada debe registrarse en la unidad.* Vuelve a intentarlo dentro de la sucursal.');
+            return await flowDynamic(`❌ *Debes estar en la unidad para checar entrada.* Estás a ${Math.round(distancia)}m.\n\nTu número quedó guardado como PENDIENTE.`);
         }
+
         let estatus = "A TIEMPO";
         if (empleado.horaEsperada && empleado.horaEsperada!== 'DESCANSO') {
             const [espHoras, espMinutos] = empleado.horaEsperada.split(':').map(Number);
@@ -51,42 +107,50 @@ const flujoEntrada = addKeyword([/^(entrada|entre|entrar|etrada|endrada)$/i], { 
             limite.setHours(espHoras, espMinutos + REGLAS.TOLERANCIA_RETARDO_MIN, 0);
             if (ahora > limite) estatus = "RETARDO";
         }
+
         await guardarAsistencia(telefono, fechaLaboral, { horaEntrada: new Date().toLocaleTimeString(), estatusEntrada: estatus });
         await flowDynamic(`✅ ¡Buen turno, *${empleado.nombre}*! Entrada registrada (${estatus}).`);
     });
 
+// --- FLUJO SALIDA ---
 const flujoSalida = addKeyword([/^(salida|salir|me voy|salda|salid)$/i], { regex: true })
-   .addAnswer('📍 Por favor, comparte tu **Ubicación** para validar tu registro de salida.')
-   .addAction({ capture: true }, async (ctx, { flowDynamic, fallBack, provider }) => {
+  .addAnswer('📍 Comparte tu *Ubicación* para validar tu salida.')
+  .addAction({ capture: true }, async (ctx, { flowDynamic, fallBack, provider }) => {
         if (!ctx.message?.locationMessage) {
-            return fallBack('⚠️ Por favor comparte tu ubicación de WhatsApp.');
+            return fallBack('⚠️ Por favor comparte tu ubicación.');
         }
         const lat = ctx.message.locationMessage.degreesLatitude;
         const lng = ctx.message.locationMessage.degreesLongitude;
         const telefono = ctx.from;
         const fechaLaboral = obtenerFechaLaboralActual();
-        const empleado = await obtenerHorarioEmpleado(telefono, fechaLaboral);
-        if(!empleado) return await flowDynamic('❌ No estás registrado.');
+
+        let empleado = await obtenerHorarioEmpleado(telefono, fechaLaboral);
+        if(!empleado) {
+            await registrarPendiente(telefono, ctx.pushName);
+            return await flowDynamic('⚠️ No estabas registrado. Te acabo de guardar como *PENDIENTE POR ACTUALIZAR*.\nVuelve a escribir *salida* y manda tu ubicación.');
+        }
+
         const sucursal = SUCURSALES[empleado.sucursalAsignada];
         const distancia = calcularDistancia(lat, lng, sucursal.lat, sucursal.lng);
         const horaActual = new Date().toLocaleTimeString();
+
         if (distancia > REGLAS.DISTANCIA_MAX_SALIDA_M) {
             await guardarAsistencia(telefono, fechaLaboral, { horaPrimerIntentoSalida: horaActual, fueraRango: true, distancia: distancia });
-            await flowDynamic('⚠️ *La salida debe de registrarse a menos de 100 metros.* Tu marca fue pre-registrada.');
+            await flowDynamic(`⚠️ *La salida debe registrarse a menos de 100 metros.* Estás a ${Math.round(distancia)}m. Tu marca fue pre-registrada.`);
             try {
                 const grupoReportesId = process.env.GRUPO_REPORTES_ID;
-                if(grupoReportesId) await provider.sendMessage(grupoReportesId, `⚠️ *ALERTA FUERA DE RANGO*\n👤 ${empleado.nombre}\n🏢 ${empleado.sucursalAsignada}\n📏 ${Math.round(distancia)} m\n⏰ ${horaActual}`);
-            } catch(e){ console.log('Error enviando alerta', e.message) }
+                if(grupoReportesId) await provider.sendMessage(grupoReportesId, `⚠️ *ALERTA FUERA DE RANGO - SALIDA*\n👤 ${empleado.nombre}\n📱 ${telefono}\n🏢 ${empleado.sucursalAsignada}\n📏 ${Math.round(distancia)} m\n⏰ ${horaActual}`);
+            } catch(e){ console.log('Error alerta', e.message) }
         } else {
             await guardarAsistencia(telefono, fechaLaboral, { horaSalidaDefinitiva: horaActual, fueraRango: false });
             await flowDynamic(`👋 Hasta luego, *${empleado.nombre}*. Salida registrada correctamente.`);
         }
     });
 
+// --- FLUJO REGISTRAR (SOLO ADMIN) ---
 const flujoRegistrar = addKeyword(['/registrar'])
-   .addAction(async (ctx, { flowDynamic }) => {
-        // Si no tienes obtenerAdministradores, usa ADMIN_NUMBER en env
-        const admins = (process.env.ADMIN_NUMBERS || '').split(',').map(s=>s.trim());
+  .addAction(async (ctx, { flowDynamic }) => {
+        const admins = (process.env.ADMIN_NUMBERS || '').split(',').map(s=>s.trim()).filter(Boolean);
         if (admins.length > 0 &&!admins.includes(ctx.from)) {
              return await flowDynamic('❌ No tienes permisos de administrador.');
         }
@@ -100,7 +164,7 @@ const flujoRegistrar = addKeyword(['/registrar'])
 
         try {
             const { google } = require('googleapis');
-            let creds = process.env.GOOGLE_CREDS;
+            let creds = process.env.GOOGLE_CREDS || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
             try { creds = JSON.parse(creds); } catch(e){}
             if(typeof creds === 'string'){ try{ creds = JSON.parse(creds); }catch(e){} }
             const auth = new google.auth.GoogleAuth({
@@ -121,6 +185,7 @@ const flujoRegistrar = addKeyword(['/registrar'])
         }
     });
 
+// CRON SABADO 11PM
 cron.schedule('0 23 * * 6', async () => {
     console.log('📅 Generando calendario automático...');
     await generarSiguienteSemana();
@@ -134,8 +199,10 @@ const main = async () => {
     } catch(e){}
 
     const adapterDB = new MockAdapter();
-    const adapterFlow = createFlow([flujoEntrada, flujoSalida, flujoRegistrar]);
-    const adapterProvider = createProvider(BaileysProvider);
+    const adapterFlow = createFlow([flujoBienvenida, flujoEntrada, flujoSalida, flujoRegistrar]);
+
+    // ACTIVAMOS GRUPOS
+    const adapterProvider = createProvider(BaileysProvider, { groupsIgnore: false });
 
     createBot({
         flow: adapterFlow,
@@ -143,7 +210,7 @@ const main = async () => {
         database: adapterDB,
     });
 
-    console.log('BOT LISTO - Esperando QR en logs...');
+    console.log('BOT LISTO - Con grupos activados');
 }
 
 main();
