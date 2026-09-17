@@ -166,16 +166,31 @@ const main = async () => {
     // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
 
-    // 2. ESCUCHAR EL QR Y CONVERTIRLO EN LINK DE TEXTO PLANO
+    // 2. FORZAR LA DETECCIÓN DIRECTA DESDE EL CLIENTE INTERNO DE BAILEYS
     adapterProvider.on('qr', (qr) => {
         console.log('==================================================');
-        console.log('📢 ¡NUEVO CÓDIGO QR DETECTADO!');
+        console.log('📢 ¡NUEVO CÓDIGO QR DETECTADO EN VIVO!');
         console.log('Copia el siguiente enlace y pégalo en tu navegador para ver la imagen:');
         console.log(`👉 https://qrserver.com{encodeURIComponent(qr)} 👈`);
         console.log('==================================================');
     });
 
-    // 3. Arrancar el ecosistema del bot con tus flujos
+    // 3. RESPALDO ABSOLUTO: Si la librería se adueña del evento, lo pescamos del socket directo
+    setTimeout(() => {
+        if (adapterProvider.vendor && adapterProvider.vendor.ev) {
+            adapterProvider.vendor.ev.on('connection.update', (update) => {
+                const { qr } = update;
+                if (qr) {
+                    console.log('==================================================');
+                    console.log('🔥 [RESPALDO] ¡CÓDIGO QR CAPTURADO DESDE EL SOCKET!');
+                    console.log(`👉 https://qrserver.com{encodeURIComponent(qr)} 👈`);
+                    console.log('==================================================');
+                }
+            });
+        }
+    }, 5000); // Esperar 5 segundos a que el proveedor se monte en Railway
+
+    // 4. Arrancar el ecosistema del bot con tus flujos
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
