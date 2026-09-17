@@ -9,6 +9,7 @@
   "dependencies": {
     "@bot-whatsapp/bot": "^0.1.2",
     "@bot-whatsapp/provider": "^0.1.2",
+    "wa-sticker-formatter": "^4.4.4",
     "google-auth-library": "^9.0.0",
     "googleapis": "^126.0.0",
     "node-cron": "^3.0.3"
