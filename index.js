@@ -166,25 +166,15 @@ const main = async () => {
     // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
     
-    // 📌 CORRECCIÓN CLAVE DE LA LÍNEA 170: Importación e inicialización directa en una sola línea
-  const main = async () => {
-    // 1. Inicializar el proveedor oficial de WhatsApp
-    const adapterProvider = createProvider(BaileysProvider);
-    const main = async () => {
-    // 1. Inicializar el proveedor oficial de WhatsApp
-    const adapterProvider = createProvider(BaileysProvider);
-    
-    // 📌 SOLUCIÓN DEFINITIVA: Instanciación limpia del adaptador nativo en memoria RAM
+    // 2. Inicializar la base de datos nativa en memoria RAM
     const MockAdapter = require('@bot-whatsapp/database/mock');
     const adapterDB = new MockAdapter();
 
-    // 2. Arrancar el ecosistema del bot de forma segura con tus 3 flujos activos
-    createBot({
-
+    // 3. Arrancar el bot (AQUÍ ESTABA EL ERROR: Esta es la sintaxis exacta y limpia)
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
-        database: adapterDB,
+        database: adapterDB
     });
 
     // 🚀 PORTAL WEB OFICIAL: Levanta la interfaz interactiva nativa usando el puerto de Railway
@@ -194,22 +184,3 @@ const main = async () => {
 
 // 🏁 Ejecución inicial obligatoria
 main();
-
-    // 2. Arrancar el ecosistema del bot de forma segura con tus 3 flujos activos
-    createBot({
-
-        flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
-        provider: adapterProvider,
-        database: adapterDB,
-    });
-
-    // 🚀 PORTAL WEB OFICIAL: Levanta la interfaz interactiva nativa usando el puerto de Railway
-    const { QRPortalWeb } = require('@bot-whatsapp/bot');
-    QRPortalWeb({ port: parseInt(process.env.PORT || '8080') });
-};
-
-// 🏁 Ejecución inicial obligatoria
-main();
-
-
-
