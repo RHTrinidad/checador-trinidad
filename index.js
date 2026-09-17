@@ -170,12 +170,17 @@ const main = async () => {
   const main = async () => {
     // 1. Inicializar el proveedor oficial de WhatsApp
     const adapterProvider = createProvider(BaileysProvider);
+    const main = async () => {
+    // 1. Inicializar el proveedor oficial de WhatsApp
+    const adapterProvider = createProvider(BaileysProvider);
     
-    // 📌 SOLUCIÓN DEFINITIVA: Adaptador de memoria nativo sin dependencias externas
-    const { MockAdapter } = require('@bot-whatsapp/bot');
+    // 📌 SOLUCIÓN DEFINITIVA: Instanciación limpia del adaptador nativo en memoria RAM
+    const MockAdapter = require('@bot-whatsapp/database/mock');
     const adapterDB = new MockAdapter();
 
     // 2. Arrancar el ecosistema del bot de forma segura con tus 3 flujos activos
+    createBot({
+
     createBot({
         flow: createFlow([flujoEntrada, flujoSalida, flujoRegistrar]),
         provider: adapterProvider,
