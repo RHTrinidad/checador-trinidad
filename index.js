@@ -163,26 +163,16 @@ const flujoRegistrar = addKeyword(['/registrar'])
 
 // 🚀 AHORA SÍ, TU FUNCIÓN MAIN CON EL SERVIDOR WEB QR:
 const main = async () => {
-    // 1. Inicializar el proveedor oficial de WhatsApp
+    // 1. Inicializar el proveedor Baileys de forma limpia
     const adapterProvider = createProvider(BaileysProvider);
     
-    // 📌 CORRECCIÓN CLAVE: Inicialización correcta y nativa de la Base de Datos en memoria
- const main = async () => {
-    // 1. Inicializar el proveedor oficial de WhatsApp
-    const adapterProvider = createProvider(BaileysProvider);
-    
-    // 📌 CORRECCIÓN ULTRA IMPORTANTE: Importar directo la subcarpeta de memoria mock
-    const MockAdapter = require('@bot-whatsapp/database/mock');
-    const adapterDB = new MockAdapter();
-
-    let codigoQRRaw = null;    
-    // 📌 CORRECCIÓN ULTRA IMPORTANTE: Importar directo la subcarpeta de memoria mock
+    // 📌 Conexión directa y simplificada a la base de datos nativa
     const MockAdapter = require('@bot-whatsapp/database/mock');
     const adapterDB = new MockAdapter();
 
     let codigoQRRaw = null;
 
-    // 2. Capturar el código QR nativo de WhatsApp en tiempo real
+    // 2. Capturar el código QR nativo de WhatsApp
     adapterProvider.on('qr', (qr) => {
         codigoQRRaw = qr;
         console.log('📢 ¡Código QR actualizado en memoria para el navegador!');
@@ -203,17 +193,15 @@ const main = async () => {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
 
         if (!codigoQRRaw) {
-            // Mensaje de espera interactivo si el bot apenas se está conectando a Meta/Baileys
             return res.end(`
                 <div style="text-align: center; font-family: Arial, sans-serif; margin-top: 80px;">
                     <h2>⏳ Conectando con los servidores de WhatsApp...</h2>
-                    <p>El bot se está iniciando de forma limpia en Railway. Esta página se actualizará automáticamente en unos segundos.</p>
+                    <p>El bot se está iniciando en Railway de forma limpia. Esta página se actualizará automáticamente en unos segundos.</p>
                     <script>setTimeout(() => { location.reload(); }, 4000);</script>
                 </div>
             `);
         }
 
-        // Convertir el texto dinámico de WhatsApp en una imagen QR perfecta
         const urlImagenQR = `https://qrserver.com{encodeURIComponent(codigoQRRaw)}`;
 
         res.end(`
@@ -236,4 +224,5 @@ const main = async () => {
     });
 };
 
+// Ejecución obligatoria inicial del bot
 main();
