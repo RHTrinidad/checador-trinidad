@@ -24,7 +24,29 @@ async function getRows(range){ const s=await sheetsClient(); const r=await s.spr
 
 async function start(){
   const {state,saveCreds}=await useMultiFileAuthState('/app/baileys_auth')
-  const sock=makeWASocket({auth:state,printQRInTerminal:true})
+ import qrcode from 'qrcode-terminal'
+
+const sock = makeWASocket({
+    auth: state
+})
+
+sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update
+    if (qr) {
+        console.log('Escanea este QR con el WhatsApp de Trinidad:')
+        qrcode.generate(qr, { small: true })
+    }
+    if (connection === 'close') {
+        const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
+        if (shouldReconnect) {
+            console.log('Reconectando...')
+            // se reconecta solo al reiniciar el proceso
+        }
+    }
+    if (connection === 'open') {
+        console.log('✅ BOT TRINIDAD CONECTADO')
+    }
+})
   sock.ev.on('creds.update',saveCreds)
   sock.ev.on('connection.update',({connection})=>{ if(connection==='open') console.log('✅ BOT TRINIDAD LISTO') })
 
