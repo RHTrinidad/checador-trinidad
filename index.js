@@ -2,40 +2,6 @@ import { default as makeWASocket, useMultiFileAuthState, DisconnectReason } from
 import qrcode from 'qrcode-terminal'
 import { createRequire } from 'module'
 const require = createRequire(import.meta.url)
-
-const fs = require('fs')
-const cron = require('node-cron')
-
-async function start(){
-  console.log('--- INICIANDO BOT TRINIDAD ---')
-  const {state,saveCreds}=await useMultiFileAuthState('/app/baileys_auth')
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys')
-    
-    const sock = makeWASocket({
-        auth: state
-    })
-
-    sock.ev.on('creds.update', saveCreds)
-
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update
-        if (qr) {
-            console.log('Escanea este QR con el WhatsApp de Trinidad:')
-            qrcode.generate(qr, { small: true })
-        }
-        if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
-            console.log('Desconectado, reconectando:', shouldReconnect)
-            if (shouldReconnect) {
-                startBot()
-            }
-        }
-        if (connection === 'open') {
-            console.log('✅ BOT TRINIDAD CONECTADO')
-        }
-    })
-
- const require = createRequire(import.meta.url)
 const { google } = require('googleapis')
 const cron = require('node-cron')
 
@@ -50,6 +16,7 @@ const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
   scopes: ['https://www.googleapis.com/auth/spreadsheets']
 })
+
 async function sheetsClient(){ const c=await auth.getClient(); return google.sheets({version:'v4',auth:c}) }
 function distM(a,b,c,d){ const R=6371000, toRad=x=>x*Math.PI/180; const dLa=toRad(c-a), dLo=toRad(d-b); const q=Math.sin(dLa/2)**2+Math.cos(toRad(a))*Math.cos(toRad(c))*Math.sin(dLo/2)**2; return R*2*Math.atan2(Math.sqrt(q),Math.sqrt(1-q)) }
 function fechaLaboral(d=new Date()){ const x=new Date(d); if(x.getHours()<4) x.setDate(x.getDate()-1); return x.toISOString().split('T')[0] }
@@ -58,10 +25,27 @@ function minutos(h){ const [hh,mm]=h.split(':').map(Number); return hh*60+mm }
 async function getRows(range){ const s=await sheetsClient(); const r=await s.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range}); return r.data.values||[] }
 
 async function start(){
+  console.log('--- INICIANDO BOT TRINIDAD ---')
   const {state,saveCreds}=await useMultiFileAuthState('/app/baileys_auth')
-  const sock=makeWASocket({auth:state,printQRInTerminal:true})
-  sock.ev.on('creds.update',saveCreds)
-  sock.ev.on('connection.update',({connection})=>{ if(connection==='open') console.log('✅ BOT TRINIDAD LISTO') })
+  const sock=makeWASocket({auth:state, printQRInTerminal:false})
+
+  sock.ev.on('creds.update', saveCreds)
+
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update
+    if (qr) {
+      console.log('Escanea este QR con el WhatsApp de Trinidad:')
+      qrcode.generate(qr, { small: true })
+    }
+    if (connection === 'close') {
+      const shouldReconnect = lastDisconnect?.error?.output?.statusCode!== DisconnectReason.loggedOut
+      console.log('Desconectado, reconectando:', shouldReconnect)
+      if (shouldReconnect) start()
+    }
+    if (connection === 'open') {
+      console.log('✅ BOT TRINIDAD CONECTADO')
+    }
+  })
 
   sock.ev.on('messages.upsert', async ({messages})=>{
     try{
@@ -96,7 +80,6 @@ async function start(){
       const asisRows=await getRows('Asistencia!A:H'); const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)&&r[2]===fLab)
       const hoy=idx>-1?asisRows[idx]:null; const sClient=await sheetsClient()
 
-      // CALENDARIO PARA RETARDO
       let estatus='A TIEMPO'
       try{
         const cal=await getRows('Calendario_Horarios!A:E'); const prog=cal.slice(1).find(r=>r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)&&r[2]===fLab)
@@ -112,27 +95,12 @@ async function start(){
         if(hoy[5]){ await sock.sendMessage(jid,{text:`Salida ya registrada a las ${hoy[5]} - ${nombre}`}); return }
         const h=horaMX(); await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!F${idx+1}:H${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[[h,h,Math.round(dMin).toString()]]}})
         if(dMin>cercana.rSal){
-          await sock.sendMessage(GRUPO_REPORTES_ID,{text:`⚠️ Salida de ${nombre} (${tel}) a ${Math.round(dMin)}m de ${cercana.nombre}. Hora: ${h}. Fuera de rango 100m. Se conserva hora primer intento.`})
+          await sock.sendMessage(GRUPO_REPORTES_ID,{text:`⚠️ Salida de ${nombre} (${tel}) a ${Math.round(dMin)}m de ${cercana.nombre}. Hora: ${h}. Fuera de rango 100m.`})
           await sock.sendMessage(jid,{text:`Salida registrada ${nombre}`})
         }else await sock.sendMessage(jid,{text:`Salida registrada ${nombre} - ${cercana.nombre}`})
       }
     }catch(e){ console.error(e) }
   })
-
-  // Chequeo cada 5 min quien no llego +20min
-  cron.schedule('*/5 * * * *', async ()=>{
-    try{
-      const hoy=fechaLaboral(); const cal=await getRows('Calendario_Horarios!A:E'); const asis=await getRows('Asistencia!A:H')
-      const ahoraMin=minutos(horaMX()); for(const r of cal.slice(1)){ if(r[2]!==hoy) continue; const tel=r[0]; const prog=r[3]; if(!prog) continue; if(ahoraMin - minutos(prog) === 20){ const tiene=asis.find(a=>a[0]&&a[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)&&a[2]===hoy&&a[3]); if(!tiene){ const sock2=global.sockRef; } } }
-    }catch(e){ console.log('cron 20m',e.message) }
-  },{timezone:'America/Mexico_City'})
-
-  // Lunes 7am resumen 48h + extras
-  cron.schedule('0 7 * * 1', async ()=>{
-    try{
-      const s=await sheetsClient(); await sock.sendMessage(GRUPO_REPORTES_ID,{text:`📊 Resumen semanal Trinidad\nBase 48h + extras\nRevisa pestaña Asistencia - Columna retardo >15min\nDescanso general LUNES`})
-    }catch{}
-  },{timezone:'America/Mexico_City'})
 }
+
 start()
-}
