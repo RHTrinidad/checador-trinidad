@@ -35,7 +35,8 @@ async function start(){
     const { connection, lastDisconnect, qr } = update
     if (qr) {
       console.log('Escanea este QR con el WhatsApp de Trinidad:')
-      qrcode.generate(qr, { small: true })
+     qrcode.generate(qr, { small: false })
+console.log(qr)
     }
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode!== DisconnectReason.loggedOut
