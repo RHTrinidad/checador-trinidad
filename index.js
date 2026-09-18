@@ -1,6 +1,7 @@
-import express from 'express'
 import { default as makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys'
-import qrcode from 'qrcode-terminal'
+import qrcodeTerminal from 'qrcode-terminal'
+import QRCode from 'qrcode'
+import express from 'express'
 import { createRequire } from 'module'
 const require = createRequire(import.meta.url)
 const { google } = require('googleapis')
@@ -25,19 +26,31 @@ function horaMX(d=new Date()){ return d.toLocaleTimeString('es-MX',{hour12:false
 function minutos(h){ const [hh,mm]=h.split(':').map(Number); return hh*60+mm }
 async function getRows(range){ const s=await sheetsClient(); const r=await s.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range}); return r.data.values||[] }
 
+// ---- WEB PARA VER QR ----
+const app = express()
+let lastQR = null
+app.get('/', (req,res)=> res.send('Bot Trinidad OK - ve a /qr para ver el QR'))
+app.get('/qr', async (req,res)=>{
+  if(!lastQR) return res.send('<h2>Aun no hay QR, espera 10s y recarga</h2>')
+  const dataUrl = await QRCode.toDataURL(lastQR)
+  res.send(`<div style="text-align:center"><h2>Escanea con WhatsApp de Trinidad</h2><img src="${dataUrl}" style="width:400px"><p>Recarga la pagina si expira (20 seg)</p></div>`)
+})
+app.listen(process.env.PORT||3000, ()=> console.log('Web en puerto '+(process.env.PORT||3000)))
+
+// ---- BOT ----
 async function start(){
   console.log('--- INICIANDO BOT TRINIDAD ---')
   const {state,saveCreds}=await useMultiFileAuthState('/app/baileys_auth')
   const sock=makeWASocket({auth:state, printQRInTerminal:false})
-
   sock.ev.on('creds.update', saveCreds)
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update
     if (qr) {
-      console.log('Escanea este QR con el WhatsApp de Trinidad:')
-     qrcode.generate(qr, { small: false })
-console.log(qr)
+      lastQR = qr
+      console.log('QR generado, ve a /qr para verlo')
+      qrcodeTerminal.generate(qr, { small: false })
+      console.log(qr)
     }
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode!== DisconnectReason.loggedOut
@@ -46,6 +59,7 @@ console.log(qr)
     }
     if (connection === 'open') {
       console.log('✅ BOT TRINIDAD CONECTADO')
+      lastQR = null
     }
   })
 
@@ -104,14 +118,4 @@ console.log(qr)
     }catch(e){ console.error(e) }
   })
 }
-const app = express()
-app.get('/', (req,res)=> res.send('Bot Trinidad OK'))
-app.get('/qr', async (req,res)=>{
-  const { toDataURL } = await import('qrcode')
-  if(global.lastQR) res.send(`<img src="${await toDataURL(global.lastQR)}">`)
-  else res.send('Aun no hay QR, espera 5 seg y recarga')
-})
-app.listen(process.env.PORT||3000)
-
-global.lastQR = null
 start()
