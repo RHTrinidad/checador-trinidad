@@ -1,5 +1,6 @@
-require('dotenv').config()
-const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys')
+import { default as makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys'
+import { createRequire } from 'module'
+const require = createRequire(import.meta.url)
 const { google } = require('googleapis')
 const cron = require('node-cron')
 
