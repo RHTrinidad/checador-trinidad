@@ -3,11 +3,12 @@ import qrcode from 'qrcode-terminal'
 import { createRequire } from 'module'
 const require = createRequire(import.meta.url)
 
-// tus otros requires siguen abajo de esto
 const fs = require('fs')
 const cron = require('node-cron')
 
-async function startBot() {
+async function start(){
+  console.log('--- INICIANDO BOT TRINIDAD ---')
+  const {state,saveCreds}=await useMultiFileAuthState('/app/baileys_auth')
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys')
     
     const sock = makeWASocket({
@@ -133,5 +134,5 @@ async function start(){
     }catch{}
   },{timezone:'America/Mexico_City'})
 }
-startBot()
+start()
 }
