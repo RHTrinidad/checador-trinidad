@@ -1,3 +1,4 @@
+import express from 'express'
 import { default as makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys'
 import qrcode from 'qrcode-terminal'
 import { createRequire } from 'module'
@@ -103,5 +104,14 @@ console.log(qr)
     }catch(e){ console.error(e) }
   })
 }
+const app = express()
+app.get('/', (req,res)=> res.send('Bot Trinidad OK'))
+app.get('/qr', async (req,res)=>{
+  const { toDataURL } = await import('qrcode')
+  if(global.lastQR) res.send(`<img src="${await toDataURL(global.lastQR)}">`)
+  else res.send('Aun no hay QR, espera 5 seg y recarga')
+})
+app.listen(process.env.PORT||3000)
 
+global.lastQR = null
 start()
