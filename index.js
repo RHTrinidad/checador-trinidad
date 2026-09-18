@@ -58,7 +58,7 @@ async function getRows(range){ const s=await sheetsClient(); const r=await s.spr
 
 async function start(){
   const {state,saveCreds}=await useMultiFileAuthState('/app/baileys_auth')
-})
+}
   sock.ev.on('creds.update',saveCreds)
   sock.ev.on('connection.update',({connection})=>{ if(connection==='open') console.log('✅ BOT TRINIDAD LISTO') })
 
