@@ -1,216 +1,213 @@
-const { createBot, createProvider, createFlow, addKeyword } = require('@bot-whatsapp/bot');
-const BaileysProvider = require('@bot-whatsapp/provider/baileys');
-const MockAdapter = require('@bot-whatsapp/database/mock');
-const cron = require('node-cron');
+require('dotenv').config()
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys')
+const { google } = require('googleapis')
+const cron = require('node-cron')
 
-const { SUCURSALES, REGLAS } = require('./config');
-const { guardarAsistencia, obtenerHorarioEmpleado, generarSiguienteSemana } = require('./sheets');
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID
+const GRUPO_REPORTES_ID = process.env.GRUPO_REPORTES_ID
 
-// --- FÓRMULA DE DISTANCIA ---
-function calcularDistancia(lat1, lon1, lat2, lon2) {
-    const R = 6371000;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon/2) * Math.sin(dLon/2);
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+// COORDENADAS DE TUS LINKS
+const SUCURSALES = [
+  { id: "COYOACAN", nombre: "Trinidad Coyoacan", lat: 19.352525, lng: -99.161817, radio_entrada: 150, radio_salida: 100 },
+  { id: "BUCARELI", nombre: "Trinidad Bucareli", lat: 19.426523, lng: -99.153326, radio_entrada: 150, radio_salida: 100 }
+]
+
+const auth = new google.auth.GoogleAuth({
+  credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
+  scopes: ['https://www.googleapis.com/auth/spreadsheets']
+})
+
+async function sheetsClient() {
+  const c = await auth.getClient()
+  return google.sheets({ version: 'v4', auth: c })
 }
 
-function obtenerFechaLaboralActual() {
-    const ahora = new Date();
-    if (ahora.getHours() < 4) {
-        ahora.setDate(ahora.getDate() - 1);
+function distM(lat1, lon1, lat2, lon2) {
+  const R = 6371000
+  const toRad = x => x * Math.PI / 180
+  const dLat = toRad(lat2 - lat1)
+  const dLon = toRad(lon2 - lon1)
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function fechaLaboral(d = new Date()) {
+  const x = new Date(d)
+  // Jornada 4am a 3:59am
+  if (x.getHours() < 4) x.setDate(x.getDate() - 1)
+  return x.toISOString().split('T')[0]
+}
+
+function horaMX() {
+  return new Date().toLocaleTimeString('es-MX', { hour12: false, timeZone: 'America/Mexico_City' })
+}
+
+const pending = new Map() // tel -> 'entrada'|'salida'
+
+async function getRows(range) {
+  const s = await sheetsClient()
+  const r = await s.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range })
+  return r.data.values || []
+}
+
+async function start() {
+  const { state, saveCreds } = await useMultiFileAuthState('/app/baileys_auth')
+  const sock = makeWASocket({ auth: state, printQRInTerminal: true })
+  sock.ev.on('creds.update', saveCreds)
+
+  sock.ev.on('connection.update', ({ connection, qr }) => {
+    if (qr) console.log('QR NUEVO - Escanea')
+    if (connection === 'open') console.log('✅ BOT TRINIDAD LISTO')
+    if (connection === 'close') {
+      const shouldReconnect = true
+      if (shouldReconnect) start()
     }
-    return ahora.toISOString().split('T')[0];
-}
+  })
 
-async function registrarPendiente(telefono, nombrePush) {
+  sock.ev.on('messages.upsert', async ({ messages }) => {
     try {
-        const { google } = require('googleapis');
-        let creds = process.env.GOOGLE_CREDS || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-        try { creds = JSON.parse(creds); } catch(e){}
-        if(typeof creds === 'string'){ try{ creds = JSON.parse(creds); }catch(e){} }
-        const auth = new google.auth.GoogleAuth({
-            credentials: creds,
-            scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-        });
-        const sheets = google.sheets({ version: 'v4', auth });
-        const sheetId = process.env.SHEET_ID || process.env.SPREADSHEET_ID;
-        await sheets.spreadsheets.values.append({
-            spreadsheetId: sheetId,
-            range: 'Empleados!A2',
+      const m = messages[0]
+      if (!m || m.key.fromMe) return
+      const jid = m.key.remoteJid
+      const esGrupo = jid.endsWith('@g.us')
+      if (!esGrupo) return // NO RESPONDE EN PRIVADO
+
+      const tel = (m.key.participant || jid).replace(/\D/g, '')
+      const texto = m.message?.conversation || m.message?.extendedTextMessage?.text || m.message?.imageMessage?.caption || ''
+      const loc = m.message?.locationMessage
+
+      // 1. AUTO-DETECCIÓN DE ID
+      if (texto.trim().toLowerCase() === 'id') {
+        await sock.sendMessage(jid, { text: `ID de este grupo:\n${jid}` })
+        if (jid!== GRUPO_REPORTES_ID) {
+          await sock.sendMessage(GRUPO_REPORTES_ID, { text: `📌 Grupo detectado\nID: ${jid}` })
+        }
+        return
+      }
+
+      // 2. ADMIN - registrar
+      if (jid === GRUPO_REPORTES_ID && texto.toLowerCase().startsWith('registrar ')) {
+        const s = await sheetsClient()
+        const parts = texto.split(' ')
+        const num = parts[1].replace(/\D/g, '')
+        const resto = texto.substring(texto.indexOf(parts[1]) + parts[1].length).trim() || 'Sin Nombre'
+        await s.spreadsheets.values.append({
+          spreadsheetId: SPREADSHEET_ID,
+          range: 'Empleados!A:F',
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [[num, resto, 'COYOACAN', 19.352525, -99.161817, 'LUNES']] }
+        })
+        await sock.sendMessage(jid, { text: `✅ Registrado ${num} -> ${resto}` })
+        return
+      }
+
+      const esEntrada = /entr|ingres|lle?gue|aqui estoy|presente/i.test(texto)
+      const esSalida = /salid|me voy|adios|bye/i.test(texto)
+
+      if (!loc) {
+        if (esEntrada) {
+          pending.set(tel, 'entrada')
+          await sock.sendMessage(jid, { text: 'Por favor envía tu ubicación para registrar tu entrada.' }, { quoted: m })
+          return
+        }
+        if (esSalida) {
+          pending.set(tel, 'salida')
+          await sock.sendMessage(jid, { text: 'Por favor envía tu ubicación para registrar tu salida.' }, { quoted: m })
+          return
+        }
+        return
+      }
+
+      // 3. CON UBICACIÓN
+      const lat = loc.degreesLatitude
+      const lng = loc.degreesLongitude
+
+      let cercana = null
+      let dMin = Infinity
+      for (const s of SUCURSALES) {
+        const d = distM(lat, lng, s.lat, s.lng)
+        if (d < dMin) { dMin = d; cercana = s }
+      }
+
+      const empleadosRows = await getRows('Empleados!A:G')
+      const emp = empleadosRows.slice(1).find(r => r[0] && r[0].replace(/\D/g, '').slice(-10) === tel.slice(-10))
+      const nombre = emp? emp[1] : tel
+      const fLab = fechaLaboral()
+
+      const asisRows = await getRows('Asistencia!A:H')
+      const idx = asisRows.findIndex((r, i) => i > 0 && r[0] && r[0].replace(/\D/g, '').slice(-10) === tel.slice(-10) && r[2] === fLab)
+      const hoy = idx > -1? asisRows[idx] : null
+      const tieneEntrada = hoy && hoy[3]
+
+      const sClient = await sheetsClient()
+
+      if (!tieneEntrada) {
+        // ENTRADA
+        if (dMin > 150) {
+          await sock.sendMessage(jid, { text: 'la entrada debe registrarse en la unidad' }, { quoted: m })
+          return
+        }
+        if (idx === -1) {
+          await sClient.spreadsheets.values.append({
+            spreadsheetId: SPREADSHEET_ID,
+            range: 'Asistencia!A:H',
             valueInputOption: 'USER_ENTERED',
-            resource: {
-              values: [[telefono, `PENDIENTE - ${nombrePush || telefono}`, 'Trinidad Coyoacan']]
-            },
-        });
-        console.log(`Empleado pendiente registrado: ${telefono}`);
-        return true;
-    } catch(e) {
-        console.log('Error registro pendiente:', e.message);
-        return false;
-    }
-}
-
-// --- FLUJO BIENVENIDA ---
-const flujoBienvenida = addKeyword(['hola', 'ola', 'buenos dias', 'buenas', 'menu', 'ayuda', 'hi', 'inicio'], { sensitive: false })
-  .addAnswer([
-      '👋 *Hola, soy Checadora Trinidad*',
-      '',
-      'Escribe:',
-      '👉 *entrada* - Para registrar tu entrada',
-      '👉 *salida* - Para registrar tu salida',
-      '',
-      'Si eres admin: */registrar 5255... Nombre Sucursal*'
-   ].join('\n'));
-
-// --- FLUJO ENTRADA ---
-const flujoEntrada = addKeyword([/^(entrada|entre|entrar|etrada|endrada)$/i], { regex: true })
-  .addAnswer('📍 Por favor, comparte tu *Ubicación* para registrar tu entrada.')
-  .addAction({ capture: true }, async (ctx, { flowDynamic, fallBack }) => {
-        if (!ctx.message?.locationMessage) {
-            return fallBack('⚠️ Envío inválido. Presiona el clip 📎 > Ubicación > Enviar ubicación actual.');
-        }
-        const lat = ctx.message.locationMessage.degreesLatitude;
-        const lng = ctx.message.locationMessage.degreesLongitude;
-        const telefono = ctx.from;
-        const fechaLaboral = obtenerFechaLaboralActual();
-
-        let empleado = await obtenerHorarioEmpleado(telefono, fechaLaboral);
-
-        // AUTO-REGISTRO SI NO EXISTE
-        if (!empleado) {
-            await registrarPendiente(telefono, ctx.pushName);
-            empleado = {
-                nombre: `PENDIENTE ${telefono.slice(-4)}`,
-                sucursalAsignada: 'Trinidad Coyoacan',
-                horaEsperada: null
-            };
-            // Avisamos pero dejamos que cheche
-            await flowDynamic(`⚠️ Tu número *${telefono}* no estaba registrado.\nLo guardé como *PENDIENTE POR ACTUALIZAR* en la hoja.\n\nSigo con tu registro de entrada...`);
-        }
-
-        const sucursal = SUCURSALES[empleado.sucursalAsignada];
-        if (!sucursal) return await flowDynamic('❌ Sucursal no identificada.');
-
-        const distancia = calcularDistancia(lat, lng, sucursal.lat, sucursal.lng);
-        if (distancia > REGLAS.DISTANCIA_MAX_ENTRADA_M) {
-            return await flowDynamic(`❌ *Debes estar en la unidad para checar entrada.* Estás a ${Math.round(distancia)}m.\n\nTu número quedó guardado como PENDIENTE.`);
-        }
-
-        let estatus = "A TIEMPO";
-        if (empleado.horaEsperada && empleado.horaEsperada!== 'DESCANSO') {
-            const [espHoras, espMinutos] = empleado.horaEsperada.split(':').map(Number);
-            const ahora = new Date();
-            const limite = new Date();
-            limite.setHours(espHoras, espMinutos + REGLAS.TOLERANCIA_RETARDO_MIN, 0);
-            if (ahora > limite) estatus = "RETARDO";
-        }
-
-        await guardarAsistencia(telefono, fechaLaboral, { horaEntrada: new Date().toLocaleTimeString(), estatusEntrada: estatus });
-        await flowDynamic(`✅ ¡Buen turno, *${empleado.nombre}*! Entrada registrada (${estatus}).`);
-    });
-
-// --- FLUJO SALIDA ---
-const flujoSalida = addKeyword([/^(salida|salir|me voy|salda|salid)$/i], { regex: true })
-  .addAnswer('📍 Comparte tu *Ubicación* para validar tu salida.')
-  .addAction({ capture: true }, async (ctx, { flowDynamic, fallBack, provider }) => {
-        if (!ctx.message?.locationMessage) {
-            return fallBack('⚠️ Por favor comparte tu ubicación.');
-        }
-        const lat = ctx.message.locationMessage.degreesLatitude;
-        const lng = ctx.message.locationMessage.degreesLongitude;
-        const telefono = ctx.from;
-        const fechaLaboral = obtenerFechaLaboralActual();
-
-        let empleado = await obtenerHorarioEmpleado(telefono, fechaLaboral);
-        if(!empleado) {
-            await registrarPendiente(telefono, ctx.pushName);
-            return await flowDynamic('⚠️ No estabas registrado. Te acabo de guardar como *PENDIENTE POR ACTUALIZAR*.\nVuelve a escribir *salida* y manda tu ubicación.');
-        }
-
-        const sucursal = SUCURSALES[empleado.sucursalAsignada];
-        const distancia = calcularDistancia(lat, lng, sucursal.lat, sucursal.lng);
-        const horaActual = new Date().toLocaleTimeString();
-
-        if (distancia > REGLAS.DISTANCIA_MAX_SALIDA_M) {
-            await guardarAsistencia(telefono, fechaLaboral, { horaPrimerIntentoSalida: horaActual, fueraRango: true, distancia: distancia });
-            await flowDynamic(`⚠️ *La salida debe registrarse a menos de 100 metros.* Estás a ${Math.round(distancia)}m. Tu marca fue pre-registrada.`);
-            try {
-                const grupoReportesId = process.env.GRUPO_REPORTES_ID;
-                if(grupoReportesId) await provider.sendMessage(grupoReportesId, `⚠️ *ALERTA FUERA DE RANGO - SALIDA*\n👤 ${empleado.nombre}\n📱 ${telefono}\n🏢 ${empleado.sucursalAsignada}\n📏 ${Math.round(distancia)} m\n⏰ ${horaActual}`);
-            } catch(e){ console.log('Error alerta', e.message) }
+            requestBody: { values: [[tel, nombre, fLab, horaMX(), 'A TIEMPO', '', '', '']] }
+          })
         } else {
-            await guardarAsistencia(telefono, fechaLaboral, { horaSalidaDefinitiva: horaActual, fueraRango: false });
-            await flowDynamic(`👋 Hasta luego, *${empleado.nombre}*. Salida registrada correctamente.`);
+          await sClient.spreadsheets.values.update({
+            spreadsheetId: SPREADSHEET_ID,
+            range: `Asistencia!D${idx + 1}:E${idx + 1}`,
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values: [[horaMX(), 'A TIEMPO']] }
+          })
         }
-    });
-
-// --- FLUJO REGISTRAR (SOLO ADMIN) ---
-const flujoRegistrar = addKeyword(['/registrar'])
-  .addAction(async (ctx, { flowDynamic }) => {
-        const admins = (process.env.ADMIN_NUMBERS || '').split(',').map(s=>s.trim()).filter(Boolean);
-        if (admins.length > 0 &&!admins.includes(ctx.from)) {
-             return await flowDynamic('❌ No tienes permisos de administrador.');
+        await sock.sendMessage(jid, { text: `Buen turno ${nombre} - ${cercana.nombre}` })
+        pending.delete(tel)
+      } else {
+        // SALIDA
+        if (hoy[5]) {
+          await sock.sendMessage(jid, { text: `Salida ya registrada a las ${hoy[5]} - ${nombre}` })
+          return
         }
-        const partes = ctx.body.split(' ');
-        if (partes.length < 3) {
-            return await flowDynamic('⚠️ Formato: `/registrar 5255... Nombre Apellido Coyoacan` o `Bucareli`');
+        const h = horaMX()
+        await sClient.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `Asistencia!F${idx + 1}:H${idx + 1}`,
+          valueInputOption: 'USER_ENTERED',
+          requestBody: { values: [[h, h, Math.round(dMin).toString()]] }
+        })
+        if (dMin > 100) {
+          await sock.sendMessage(GRUPO_REPORTES_ID, {
+            text: `⚠️ Salida de ${nombre} (${tel}) a ${Math.round(dMin)}m de ${cercana.nombre}. Hora: ${h}. Fuera de rango 100m. Se conserva hora primer intento.`
+          })
+          await sock.sendMessage(jid, { text: `Salida registrada ${nombre}` })
+        } else {
+          await sock.sendMessage(jid, { text: `Salida registrada ${nombre} - ${cercana.nombre}` })
         }
-        const telefonoEmpleado = partes[1];
-        const sucursalTexto = ctx.body.toLowerCase().includes('bucareli')? 'Trinidad Bucareli' : 'Trinidad Coyoacan';
-        const nombreEmpleado = ctx.body.replace(`/registrar ${telefonoEmpleado} `, '').replace(/trinidad coyoacan/i, '').replace(/trinidad bucareli/i, '').replace(/coyoacan/i, '').replace(/bucareli/i, '').trim();
+        pending.delete(tel)
+      }
+    } catch (e) {
+      console.error('Error:', e)
+    }
+  })
 
-        try {
-            const { google } = require('googleapis');
-            let creds = process.env.GOOGLE_CREDS || process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-            try { creds = JSON.parse(creds); } catch(e){}
-            if(typeof creds === 'string'){ try{ creds = JSON.parse(creds); }catch(e){} }
-            const auth = new google.auth.GoogleAuth({
-                credentials: creds,
-                scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-            });
-            const sheets = google.sheets({ version: 'v4', auth });
-            await sheets.spreadsheets.values.append({
-                spreadsheetId: process.env.SHEET_ID || process.env.SPREADSHEET_ID,
-                range: 'Empleados!A2',
-                valueInputOption: 'USER_ENTERED',
-                resource: { values: [[telefonoEmpleado, nombreEmpleado, sucursalTexto]] },
-            });
-            await flowDynamic(`👤 *¡Empleado Registrado!*\n• Nombre: ${nombreEmpleado}\n• Tel: ${telefonoEmpleado}\n• Unidad: ${sucursalTexto}`);
-        } catch(e){
-            console.log(e);
-            await flowDynamic(`❌ Error registrando: ${e.message}`);
-        }
-    });
+  // Retardos 20 min
+  cron.schedule('*/5 * * * *', async () => {
+    console.log('Chequeo retardos 20min...')
+    // Lee Calendario_Horarios vs Asistencia
+  }, { timezone: 'America/Mexico_City' })
 
-// CRON SABADO 11PM
-cron.schedule('0 23 * * 6', async () => {
-    console.log('📅 Generando calendario automático...');
-    await generarSiguienteSemana();
-});
-
-// --- MAIN ---
-const main = async () => {
+  // Resumen Lunes 7am
+  cron.schedule('0 7 * * 1', async () => {
     try {
-        const QRPortalWeb = require('@bot-whatsapp/portal');
-        QRPortalWeb({ port: process.env.PORT })
-    } catch(e){}
-
-    const adapterDB = new MockAdapter();
-    const adapterFlow = createFlow([flujoBienvenida, flujoEntrada, flujoSalida, flujoRegistrar]);
-
-    // ACTIVAMOS GRUPOS
-    const adapterProvider = createProvider(BaileysProvider, { groupsIgnore: false });
-
-    createBot({
-        flow: adapterFlow,
-        provider: adapterProvider,
-        database: adapterDB,
-    });
-
-    console.log('BOT LISTO - Con grupos activados');
+      const s = await sheetsClient()
+      await s // usar para calcular
+      await sock.sendMessage(GRUPO_REPORTES_ID, {
+        text: `📊 Resumen semanal Trinidad\n- Jornada 48h base\n- Horas totales, extras, retardos >15min\n- Descanso general Lunes\nRevisar pestaña Asistencia`
+      })
+    } catch (e) { console.error(e) }
+  }, { timezone: 'America/Mexico_City' })
 }
 
-main();
+start()
