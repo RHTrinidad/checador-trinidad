@@ -1,6 +1,40 @@
 import { default as makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys'
+import qrcode from 'qrcode-terminal'
 import { createRequire } from 'module'
 const require = createRequire(import.meta.url)
+
+// tus otros requires siguen abajo de esto
+const fs = require('fs')
+const cron = require('node-cron')
+
+async function startBot() {
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys')
+    
+    const sock = makeWASocket({
+        auth: state
+    })
+
+    sock.ev.on('creds.update', saveCreds)
+
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update
+        if (qr) {
+            console.log('Escanea este QR con el WhatsApp de Trinidad:')
+            qrcode.generate(qr, { small: true })
+        }
+        if (connection === 'close') {
+            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
+            console.log('Desconectado, reconectando:', shouldReconnect)
+            if (shouldReconnect) {
+                startBot()
+            }
+        }
+        if (connection === 'open') {
+            console.log('✅ BOT TRINIDAD CONECTADO')
+        }
+    })
+
+ const require = createRequire(import.meta.url)
 const { google } = require('googleapis')
 const cron = require('node-cron')
 
@@ -24,28 +58,6 @@ async function getRows(range){ const s=await sheetsClient(); const r=await s.spr
 
 async function start(){
   const {state,saveCreds}=await useMultiFileAuthState('/app/baileys_auth')
- import qrcode from 'qrcode-terminal'
-
-const sock = makeWASocket({
-    auth: state
-})
-
-sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update
-    if (qr) {
-        console.log('Escanea este QR con el WhatsApp de Trinidad:')
-        qrcode.generate(qr, { small: true })
-    }
-    if (connection === 'close') {
-        const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
-        if (shouldReconnect) {
-            console.log('Reconectando...')
-            // se reconecta solo al reiniciar el proceso
-        }
-    }
-    if (connection === 'open') {
-        console.log('✅ BOT TRINIDAD CONECTADO')
-    }
 })
   sock.ev.on('creds.update',saveCreds)
   sock.ev.on('connection.update',({connection})=>{ if(connection==='open') console.log('✅ BOT TRINIDAD LISTO') })
@@ -121,4 +133,5 @@ sock.ev.on('connection.update', async (update) => {
     }catch{}
   },{timezone:'America/Mexico_City'})
 }
-start()
+startBot()
+}
