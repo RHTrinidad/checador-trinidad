@@ -78,7 +78,10 @@ async function start(){
     try{
       const m=messages[0]; if(!m||m.key.fromMe) return
       const jid=m.key.remoteJid; if(!jid.endsWith('@g.us')) return
-      const tel=(m.key.participant||jid).replace(/\D/g,'')
+     // WhatsApp ahora manda LID en participant, el telefono real viene en participantAlt
+const rawId = m.key.participantAlt || m.key.participantPn || m.key.participant || jid
+const tel = rawId.replace(/\D/g,'')
+console.log('DEBUG tel detectado:', tel, 'raw:', rawId, 'pushName:', m.pushName)
       const texto=m.message?.conversation||m.message?.extendedTextMessage?.text||m.message?.imageMessage?.caption||''
       const loc=m.message?.locationMessage
 
