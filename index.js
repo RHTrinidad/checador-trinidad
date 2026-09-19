@@ -9,10 +9,37 @@ const cron = require('node-cron')
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID
 const GRUPO_REPORTES_ID = process.env.GRUPO_REPORTES_ID
-const SUCURSALES = [
-  { id:"COYOACAN", nombre:"Trinidad Coyoacan", lat:19.352525, lng:-99.161817, rEnt:150, rSal:100 },
-  { id:"BUCARELI", nombre:"Trinidad Bucareli", lat:19.426523, lng:-99.153326, rEnt:150, rSal:100 }
-]
+
+// --- LEE SUCURSALES DESDE VARIABLE, SI NO USA LAS DE POR DEFECTO ---
+let SUCURSALES = []
+try {
+  if (process.env.SUCURSALES_JSON) {
+    const parsed = JSON.parse(process.env.SUCURSALES_JSON)
+    // Soporta los 2 formatos: array o objeto
+    if (Array.isArray(parsed)) {
+      SUCURSALES = parsed
+    } else {
+      SUCURSALES = Object.keys(parsed).map(k => ({
+        id: k,
+        nombre: k,
+        lat: parsed[k].lat,
+        lng: parsed[k].lon || parsed[k].lng,
+        rEnt: parsed[k].radio || parsed[k].rEnt || 500,
+        rSal: parsed[k].radio || parsed[k].rSal || 500
+      }))
+    }
+    console.log('Sucursales cargadas desde SUCURSALES_JSON:', SUCURSALES)
+  } else {
+    throw new Error('No hay SUCURSALES_JSON')
+  }
+} catch (e) {
+  console.log('Usando sucursales por defecto', e.message)
+  SUCURSALES = [
+    { id:"COYOACAN", nombre:"Trinidad Coyoacan", lat:19.352525, lng:-99.161817, rEnt:500, rSal:500 },
+    { id:"BUCARELI", nombre:"Trinidad Bucareli", lat:19.426523, lng:-99.153326, rEnt:500, rSal:500 },
+    { id:"JUAREZ", nombre:"Trinidad Juarez", lat:19.433, lng:-99.147, rEnt:500, rSal:500 }
+  ]
+}
 
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
@@ -40,7 +67,7 @@ app.listen(process.env.PORT||3000, ()=> console.log('Web en puerto '+(process.en
 // ---- BOT ----
 async function start(){
   console.log('--- INICIANDO BOT TRINIDAD ---')
- const { state, saveCreds } = await useMultiFileAuthState('/app/auth')
+  const { state, saveCreds } = await useMultiFileAuthState('/app/auth')
   const sock=makeWASocket({auth:state, printQRInTerminal:false})
   sock.ev.on('creds.update', saveCreds)
 
@@ -103,7 +130,7 @@ async function start(){
       }catch{}
 
       if(!hoy ||!hoy[3]){
-        if(dMin>cercana.rEnt){ await sock.sendMessage(jid,{text:'la entrada debe registrarse en la unidad'},{quoted:m}); return }
+        if(dMin>cercana.rEnt){ await sock.sendMessage(jid,{text:`la entrada debe registrarse en la unidad - estas a ${Math.round(dMin)}m de ${cercana.nombre}`},{quoted:m}); return }
         if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:H',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel,nombre,fLab,horaMX(),estatus,'','','']]}})
         else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!D${idx+1}:E${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[[horaMX(),estatus]]}})
         await sock.sendMessage(jid,{text:`Buen turno ${nombre} - ${cercana.nombre}`})
@@ -111,7 +138,7 @@ async function start(){
         if(hoy[5]){ await sock.sendMessage(jid,{text:`Salida ya registrada a las ${hoy[5]} - ${nombre}`}); return }
         const h=horaMX(); await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!F${idx+1}:H${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[[h,h,Math.round(dMin).toString()]]}})
         if(dMin>cercana.rSal){
-          await sock.sendMessage(GRUPO_REPORTES_ID,{text:`⚠️ Salida de ${nombre} (${tel}) a ${Math.round(dMin)}m de ${cercana.nombre}. Hora: ${h}. Fuera de rango 100m.`})
+          await sock.sendMessage(GRUPO_REPORTES_ID,{text:`⚠️ Salida de ${nombre} (${tel}) a ${Math.round(dMin)}m de ${cercana.nombre}. Hora: ${h}. Fuera de rango.`})
           await sock.sendMessage(jid,{text:`Salida registrada ${nombre}`})
         }else await sock.sendMessage(jid,{text:`Salida registrada ${nombre} - ${cercana.nombre}`})
       }
