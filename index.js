@@ -62,7 +62,15 @@ app.listen(process.env.PORT||3000, ()=> console.log('Web en puerto '+(process.en
 async function start(){
   console.log('--- INICIANDO BOT TRINIDAD ---')
   const { state, saveCreds } = await useMultiFileAuthState('/app/auth')
-  const sock=makeWASocket({auth:state, printQRInTerminal:false})
+ const sock=makeWASocket({
+  auth:state, 
+  printQRInTerminal:false,
+  markOnlineOnConnect:false,
+  syncFullHistory:false,
+  generateHighQualityLinkPreview:false,
+  retryRequestDelayMs:500,
+  keepAliveIntervalMs:30000
+})
   sock.ev.on('creds.update', saveCreds)
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update
