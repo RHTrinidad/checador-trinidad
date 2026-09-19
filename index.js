@@ -40,7 +40,7 @@ app.listen(process.env.PORT||3000, ()=> console.log('Web en puerto '+(process.en
 // ---- BOT ----
 async function start(){
   console.log('--- INICIANDO BOT TRINIDAD ---')
-  const {state,saveCreds}=await useMultiFileAuthState('/app/baileys_auth')
+ const { state, saveCreds } = await useMultiFileAuthState('/app/auth')
   const sock=makeWASocket({auth:state, printQRInTerminal:false})
   sock.ev.on('creds.update', saveCreds)
 
