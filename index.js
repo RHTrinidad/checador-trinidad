@@ -39,11 +39,14 @@ function fechaLaboral(d=new Date()){ const x=new Date(d); if(x.getHours()<4) x.s
 function horaMX(d=new Date()){ return d.toLocaleTimeString('es-MX',{hour12:false,timeZone:'America/Mexico_City'}) }
 function minutos(h){ const mm = h?.toString().match(/(\d{1,2}):(\d{2})/); return mm? parseInt(mm[1])*60+parseInt(mm[2]) : 0 }
 function calcularHorasTrabajadas(horaEntrada, horaSalida){
-  if(!horaSalida) return "No registró salida - 8h";
+  if(!horaSalida) return "8";
   const toSeg = (h) => { const [hh, mm, ss] = (h||'').split(":").map(Number); return (hh||0)*3600 + (mm||0)*60 + (ss||0); };
   let diff = toSeg(horaSalida) - toSeg(horaEntrada);
   if(diff < 0) diff += 24*3600;
-  return `${Math.floor(diff/3600)}h ${Math.floor((diff%3600)/60)}min`;
+  const h = Math.floor(diff/3600);
+  const m = Math.floor((diff%3600)/60);
+  if(h===8 && m===0) return "8";
+  return `${h}:${String(m).padStart(2,'0')}:00`.replace(/^0+/,'') || "8";
 }
 function parseFechaMX(s){
   if(!s) return null
@@ -134,11 +137,11 @@ async function reporteSucursal(filtroSucursal, jidRespuesta, sock){
   else {
     for(const nombre in datos){
       const d = datos[nombre]
-      txt += `\n*${nombre}*: ${d.dias} días | Ret ${d.ret} (${d.min}m) | Sin salida: ${d.sinSalida} | Horas: ${d.horas.join(', ')||'8h'}\n`
+      txt += `\n*${nombre}*: ${d.dias} días | Ret ${d.ret} (${d.min}m) | Sin salida: ${d.sinSalida} | Horas: ${d.horas.join(', ')||'8, 8'}\n`
     }
   }
   await sock.sendMessage(jidRespuesta,{text:txt})
-  return { lunesPasado, domingoPasado }
+  return { lunesPasado, domingoPasado, datos }
 }
 async function generarExcelSemanaYEnviar(filtroSucursal, jid, sock){
   const sClient = await sheetsClient()
@@ -160,21 +163,57 @@ async function generarExcelSemanaYEnviar(filtroSucursal, jid, sock){
     if(esJuarez) return suc.includes('juarez') || suc.includes('bucareli')
     return suc.includes(filtroSucursal.toLowerCase())
   })
-  const header = ["Tel","Nombre","Fecha","Entrada","Estatus Entrada","Salida","Suc Entrada","Dist Entr","Suc Salida","Dist Sal","Horas Trabajadas"]
-  const dataSheet = [header,...filtradas]
-  try{ await sClient.spreadsheets.values.clear({spreadsheetId: SPREADSHEET_ID, range:'Reporte_Semana!A1:K1000'}) }
-  catch{ await sClient.spreadsheets.batchUpdate({spreadsheetId: SPREADSHEET_ID, requestBody:{requests:[{addSheet:{properties:{title:'Reporte_Semana'}}}]} })}
-  await sClient.spreadsheets.values.update({spreadsheetId: SPREADSHEET_ID, range:'Reporte_Semana!A1', valueInputOption:'USER_ENTERED', requestBody:{values:dataSheet}})
+  let datos = {}
+  for(const f of filtradas){
+    const nombre = f[1]||'Desconocido'
+    if(!datos[nombre]) datos[nombre] = { dias:0, ret:0, min:0, sinSalida:0, horas:[] }
+    datos[nombre].dias++
+    const retMatch = (f[4]||'').match(/(\d+)\s*min/)
+    if(retMatch){ datos[nombre].ret++; datos[nombre].min += parseInt(retMatch[1]) }
+    if(!f[5]) datos[nombre].sinSalida++
+    if(f[10]) datos[nombre].horas.push(f[10])
+  }
+  const headerDetalle = ["Tel","Nombre","Fecha","Entrada","Estatus Entrada","Salida","Suc Entrada","Dist Entr","Suc Salida","Dist Sal","Horas Trabajadas"]
+  const rango = `${lunesPasado.toLocaleDateString('es-MX')} al ${domingoPasado.toLocaleDateString('es-MX')}`
+
   const workbook = new ExcelJS.Workbook()
-  const ws = workbook.addWorksheet(`Reporte ${filtroSucursal}`)
-  ws.addRow(header); filtradas.forEach(f=> ws.addRow(f))
-  ws.columns.forEach(col=> col.width = 18); ws.getRow(1).font = {bold:true}
+  const wsResumen = workbook.addWorksheet('Resumen')
+  wsResumen.addRow([`REPORTE ${filtroSucursal.toUpperCase()} - Semana pasada`]).font={bold:true, size:14}
+  wsResumen.addRow([rango])
+  if(esCoyo) wsResumen.addRow(['Incluye: Coyoacán + Servicio Hotel'])
+  wsResumen.addRow([])
+  wsResumen.addRow(['Nombre','Días','Retardos','Min','Sin salida','Horas']).font={bold:true}
+  for(const [nombre,d] of Object.entries(datos)){
+    wsResumen.addRow([nombre, `${d.dias} días`, `Ret ${d.ret} (${d.min}m)`, d.sinSalida, d.horas.join(', ') || '8, 8'])
+  }
+  wsResumen.columns.forEach(c=> c.width=22)
+
+  const wsDetalle = workbook.addWorksheet('Detalle')
+  wsDetalle.addRow(headerDetalle).font={bold:true}
+  filtradas.forEach(f=> wsDetalle.addRow(f))
+  wsDetalle.columns.forEach(c=> c.width=18)
+  wsDetalle.getRow(1).font={bold:true}
+
+  try{
+    const sheetData = [
+      [`REPORTE ${filtroSucursal.toUpperCase()}`, rango, esCoyo?"Coyoacán + Servicio Hotel":""],
+      [],
+      ['Nombre','Días','Ret','Min','Sin salida','Horas'],
+     ...Object.entries(datos).map(([n,d])=>[n,d.dias,d.ret,d.min,d.sinSalida,d.horas.join(', ')]),
+      [],
+      headerDetalle,
+     ...filtradas
+    ]
+    await sClient.spreadsheets.values.clear({spreadsheetId: SPREADSHEET_ID, range:'Reporte_Semana!A1:K1000'}).catch(async()=>{ await sClient.spreadsheets.batchUpdate({spreadsheetId: SPREADSHEET_ID, requestBody:{requests:[{addSheet:{properties:{title:'Reporte_Semana'}}}]} }) })
+    await sClient.spreadsheets.values.update({spreadsheetId: SPREADSHEET_ID, range:'Reporte_Semana!A1', valueInputOption:'USER_ENTERED', requestBody:{values:sheetData}})
+  }catch(e){ console.log('Sheet error', e.message) }
+
   const fileName = `Reporte_${filtroSucursal}_${lunesPasado.toISOString().split('T')[0]}.xlsx`
   const filePath = path.join(os.tmpdir(), fileName)
   await workbook.xlsx.writeFile(filePath)
   await sock.sendMessage(jid,{ document: fs.readFileSync(filePath), mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', fileName: fileName })
   fs.unlinkSync(filePath)
-  return { total: filtradas.length, rango: `${lunesPasado.toLocaleDateString('es-MX')} al ${domingoPasado.toLocaleDateString('es-MX')}` }
+  return { total: filtradas.length, rango }
 }
 async function enviarReportesAutomaticos(sock){
   if(!GRUPO_REPORTES_ID) return
@@ -186,33 +225,26 @@ async function enviarReportesAutomaticos(sock){
     await new Promise(r=>setTimeout(r,2000))
     await reporteSucursal('juarez', jid, sock)
     await generarExcelSemanaYEnviar('juarez', jid, sock)
-    await sock.sendMessage(jid,{text:`✅ Reportes automáticos - ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}`})
+    await sock.sendMessage(jid,{text:`✅ Reportes automáticos enviados - ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}`})
   }catch(e){ console.error('Error reporte auto:', e) }
 }
 
-const app = express(); let lastQR=null
+const app = express(); let lastQR=null; let globalSock=null
 app.get('/', (req,res)=> res.send('Bot OK - /qr'))
-app.get('/qr', async (req,res)=>{ if(!lastQR) return res.send('No QR'); const dataUrl=await QRCode.toDataURL(lastQR); res.send(`<img src="${dataUrl}" style="width:350px">`) })
-app.get('/test-reporte', async (req,res)=>{
-  try{
-    const { state } = await useMultiFileAuthState('/app/auth')
-    const sock = makeWASocket({ auth: state })
-    await enviarReportesAutomaticos(sock)
-    res.send('Reporte enviado a '+GRUPO_REPORTES_ID)
-  }catch(e){ res.send('Error: '+e.message) }
-})
+app.get('/qr', async (req,res)=>{ if(!lastQR) return res.send('No QR'); const dataUrl=await QRCode.toDataURL(lastQR); res.send(`<img src="${dataUrl}" style="width:350px"><p>Escanea</p>`) })
 app.listen(process.env.PORT||3000)
 
 async function start(){
   const { state, saveCreds } = await useMultiFileAuthState('/app/auth')
   const sock=makeWASocket({ auth:state, printQRInTerminal:false, markOnlineOnConnect:false })
+  globalSock=sock
   sock.ev.on('creds.update', saveCreds)
   sock.ev.on('connection.update', async ({connection, lastDisconnect, qr}) => {
     if (qr) { lastQR = qr; qrcodeTerminal.generate(qr,{small:false}) }
     if (connection === 'close') { const shouldReconnect = lastDisconnect?.error?.output?.statusCode!==DisconnectReason.loggedOut; if(shouldReconnect) start() }
     if (connection === 'open') {
       console.log('✅ CONECTADO')
-      cron.schedule('0 7 * * 1', () => { enviarReportesAutomaticos(sock) }, { timezone: 'America/Mexico_City' })
+      cron.schedule('0 7 * * 1', () => { enviarReportesAutomaticos(globalSock) }, { timezone: 'America/Mexico_City' })
       console.log('⏰ Cron lunes 7am CDMX activado para '+GRUPO_REPORTES_ID)
     }
   })
@@ -223,22 +255,27 @@ async function start(){
       const rawId=realPn||pnFromStore||rawLid||jid; const tel=rawId.replace(/\D/g,'')
       const texto=m.message?.conversation||m.message?.extendedTextMessage?.text||m.message?.imageMessage?.caption||''; const loc=m.message?.locationMessage
       if(texto.trim().toLowerCase()==='id'){ await sock.sendMessage(jid,{text:`ID: ${jid}`}); return }
+
       if(texto.toLowerCase().startsWith('resumen ')){
         const txtLow = texto.toLowerCase()
         if(txtLow.includes('bucareli') || txtLow.includes('juarez') || txtLow.includes('coyo') || txtLow.includes('hotel')){
           let suc = 'coyoacan'
           if(txtLow.includes('juarez') || txtLow.includes('bucareli')) suc = 'juarez'
-          else if(txtLow.includes('hotel')) suc = 'hotel'
           else if(txtLow.includes('coyo')) suc = 'coyoacan'
           await reporteSucursal(suc, jid, sock)
           const info = await generarExcelSemanaYEnviar(suc, jid, sock)
-          await sock.sendMessage(jid,{text:`✅ Excel ${suc} - ${info.total} registros - ${info.rango}`})
+          await sock.sendMessage(jid,{text:`✅ Excel ${suc} - ${info.total} registros - ${info.rango}\nhttps://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}`})
           return
         }
         await resumenEmpleado(texto.slice(8).trim(), jid, sock); return
       }
+
       if(/^(reporte|checador)/i.test(texto)){
         const txtLow = texto.toLowerCase()
+        if(txtLow.includes('auto') || txtLow.includes('test')){
+          await enviarReportesAutomaticos(sock)
+          return
+        }
         let suc = 'coyoacan'
         if(txtLow.includes('juarez') || txtLow.includes('bucareli')) suc = 'juarez'
         else if(txtLow.includes('hotel')) suc = 'hotel'
@@ -248,15 +285,19 @@ async function start(){
         await sock.sendMessage(jid,{text:`✅ Excel ${suc} - ${info.total} registros - ${info.rango}`})
         return
       }
+
       const esEntrada=/entr|ingres|lle?gue|aqui estoy|presente/i.test(texto); const esSalida=/salid|me voy|adios|bye/i.test(texto)
       if(!loc){ if(esEntrada) await sock.sendMessage(jid,{text:'Envía tu ubicación para entrada'},{quoted:m}); if(esSalida) await sock.sendMessage(jid,{text:'Envía tu ubicación para salida'},{quoted:m}); return }
+
       const lat=loc.degreesLatitude, lng=loc.degreesLongitude
       let cercana=null,dMin=Infinity; for(const s of SUCURSALES){ const d=distM(lat,lng,s.lat,s.lng); if(d<dMin){dMin=d; cercana=s} }
+
       const empRows=await getRows('Empleados!A:G')
       let emp = empRows.slice(1).find(r=>r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10))
       if(!emp && rawLid.includes('@lid') && m.pushName){ emp = empRows.slice(1).find(r=> r[1] && r[1].toLowerCase().includes(m.pushName.toLowerCase().split(' ')[0])) }
       const nombreRegistrado = emp? emp[1] : null
       const nombreFinal = nombreRegistrado || m.pushName || tel
+
       const fLab=fechaLaboral(); const asisRows=await getRows('Asistencia!A:K'); const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)&&r[2]===fLab)
       const hoy=idx>-1?asisRows[idx]:null; const sClient=await sheetsClient()
       let estatus='A TIEMPO'; let horaProg=null
@@ -266,6 +307,7 @@ async function start(){
         else { const baseRows=await getRows('Horario_Base!A:J'); const baseRow=baseRows.slice(1).find(r=>r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)); if(baseRow){ const fecha=new Date(fLab+'T12:00:00'); const mapa={1:3,2:4,3:5,4:6,5:7,6:8,0:9}; const valor=baseRow[mapa[fecha.getDay()]]||''; if(valor.toLowerCase().includes('descanso')) estatus='DESCANSO'; else horaProg=valor } }
         if(horaProg){ const hp=horaProg.toString().match(/\d{1,2}:\d{2}/)?.[0]||horaProg; const dif=minutos(horaMX())-minutos(hp); if(dif>15) estatus=`RETARDO ${dif}min (Prog ${hp})`; else estatus=`A TIEMPO Prog ${hp}` }
       }catch{}
+
       if(!hoy ||!hoy[3]){
         if(dMin>cercana.rEnt){ await sock.sendMessage(jid,{text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}, estas a ${Math.round(dMin)}m`},{quoted:m}); return }
         const h=horaMX()
