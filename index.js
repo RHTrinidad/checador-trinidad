@@ -16,15 +16,16 @@ try {
     const arr = Array.isArray(parsed)? parsed : Object.values(parsed)
     SUCURSALES = arr.map(s => ({
       id: s.id || s.nombre, nombre: s.nombre || s.id, lat: s.lat, lng: s.lng || s.lon,
-      rEnt: s.radio_entrada || s.rEnt || s.radio || 250,
-      rSal: s.radio_salida || s.rSal || s.radio || 150
+      rEnt: 150, // <-- 150m FIJO PARA TODAS
+      rSal: 150
     }))
   } else throw new Error('no json')
 } catch (e) {
   SUCURSALES = [
-    { id:"COYOACAN", nombre:"Trinidad Coyoacan", lat:19.352525, lng:-99.161817, rEnt:250, rSal:150 },
-    { id:"BUCARELI", nombre:"Trinidad Bucareli", lat:19.426523, lng:-99.153326, rEnt:250, rSal:150 },
-    { id:"JUAREZ", nombre:"Trinidad Juarez", lat:19.4314119, lng:-99.1512074, rEnt:250, rSal:150 }
+    { id:"COYOACAN", nombre:"Trinidad Coyoacan", lat:19.352525, lng:-99.161817, rEnt:150, rSal:150 },
+    { id:"BUCARELI", nombre:"Trinidad Bucareli", lat:19.426523, lng:-99.153326, rEnt:150, rSal:150 },
+    { id:"JUAREZ", nombre:"Trinidad Juarez", lat:19.4314119, lng:-99.1512074, rEnt:150, rSal:150 },
+    { id:"HOTEL", nombre:"Servicio Hotel", lat:19.3517918, lng:-99.1681579, rEnt:150, rSal:150 }
   ]
 }
 
@@ -37,6 +38,23 @@ function distM(a,b,c,d){ const R=6371000, toRad=x=>x*Math.PI/180; const dLa=toRa
 function fechaLaboral(d=new Date()){ const x=new Date(d); if(x.getHours()<4) x.setDate(x.getDate()-1); return x.toISOString().split('T')[0] }
 function horaMX(d=new Date()){ return d.toLocaleTimeString('es-MX',{hour12:false,timeZone:'America/Mexico_City'}) }
 function minutos(h){ const mm = h?.toString().match(/(\d{1,2}):(\d{2})/); return mm? parseInt(mm[1])*60+parseInt(mm[2]) : 0 }
+
+// NUEVO: Calcular horas trabajadas para columna K
+function calcularHorasTrabajadas(horaEntrada, horaSalida){
+  if(!horaSalida || horaSalida === ""){
+    return "No registró salida - 8h";
+  }
+  const toSeg = (h) => {
+    const [hh, mm, ss] = (h||'').split(":").map(Number);
+    return (hh||0)*3600 + (mm||0)*60 + (ss||0);
+  };
+  let diff = toSeg(horaSalida) - toSeg(horaEntrada);
+  if(diff < 0) diff += 24*3600;
+  const h = Math.floor(diff/3600);
+  const m = Math.floor((diff%3600)/60);
+  return `${h}h ${m}min`;
+}
+
 function parseFechaMX(s){
   if(!s) return null
   if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(s+'T12:00:00')
@@ -62,7 +80,7 @@ async function getDescansosMap(){
 async function resumenEmpleado(nombreBuscar, jidRespuesta, sock){
   const sClient=await sheetsClient()
   const [asisRes, descansosMap]=await Promise.all([
-    sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID, range:'Asistencia!A2:J'}),
+    sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID, range:'Asistencia!A2:K'}),
     getDescansosMap()
   ])
   const filas=asisRes.data.values||[]; const buscar=nombreBuscar.toLowerCase().trim()
@@ -79,7 +97,7 @@ async function resumenEmpleado(nombreBuscar, jidRespuesta, sock){
     if(fecha>=hace30 && tieneEntrada) dias30++
     if(fecha>=hace14 && ret>0){ retardos14++; min14+=ret }
     if(fecha>=lunes && fecha<=domingo && tieneEntrada){
-      diasSem++; const flagSalida=tieneSalida? `Sal:${f[5]} en ${f[8]||''}` : `⚠️ SIN SALIDA (8h) en ${f[6]||''}`; detalleSem.push(`• ${f[2]}: Ent ${f[3]} en ${f[6]||''} | ${flagSalida} ${ret>0?`RET ${ret}m`:''}`); if(!tieneSalida) sinSalidaSem.push(f[2]); if(ret>0){ retardosSem++; minSem+=ret }
+      diasSem++; const flagSalida=tieneSalida? `Sal:${f[5]} en ${f[8]||''} (${f[10]||''})` : `⚠️ ${f[10]||'SIN SALIDA (8h)'} en ${f[6]||''}`; detalleSem.push(`• ${f[2]}: Ent ${f[3]} en ${f[6]||''} | ${flagSalida} ${ret>0?`RET ${ret}m`:''}`); if(!tieneSalida) sinSalidaSem.push(f[2]); if(ret>0){ retardosSem++; minSem+=ret }
     }
   }
   let esperados30=0; for(let d=new Date(hace30); d<=ahoraMX; d.setDate(d.getDate()+1)){ if(!descEmpleado.has(d.getDay())) esperados30++ }
@@ -134,13 +152,12 @@ async function start(){
       let cercana=null,dMin=Infinity; for(const s of SUCURSALES){ const d=distM(lat,lng,s.lat,s.lng); if(d<dMin){dMin=d; cercana=s} }
 
       const empRows=await getRows('Empleados!A:G')
-      // NOMBRE REGISTRADO SI EXISTE, SI NO NOMBRE DE WHATSAPP
       let emp = empRows.slice(1).find(r=>r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10))
       if(!emp && rawLid.includes('@lid') && m.pushName){ emp = empRows.slice(1).find(r=> r[1] && r[1].toLowerCase().includes(m.pushName.toLowerCase().split(' ')[0])) }
       const nombreRegistrado = emp? emp[1] : null
-      const nombreFinal = nombreRegistrado || m.pushName || tel // <--- AQUÍ ESTÁ LA LÓGICA QUE PEDISTE
+      const nombreFinal = nombreRegistrado || m.pushName || tel
 
-      const fLab=fechaLaboral(); const asisRows=await getRows('Asistencia!A:J'); const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)&&r[2]===fLab)
+      const fLab=fechaLaboral(); const asisRows=await getRows('Asistencia!A:K'); const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)&&r[2]===fLab)
       const hoy=idx>-1?asisRows[idx]:null; const sClient=await sheetsClient()
       let estatus='A TIEMPO'; let horaProg=null
       try{
@@ -151,17 +168,29 @@ async function start(){
       }catch{}
 
       if(!hoy ||!hoy[3]){
+        // ENTRADA
         if(dMin>cercana.rEnt){ await sock.sendMessage(jid,{text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}, estas a ${Math.round(dMin)}m`},{quoted:m}); return }
         const h=horaMX()
-        if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:J',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel,nombreFinal,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','']]}})
-        else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!C${idx+1}:H${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[[fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString()]]}})
-        await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreFinal} en ${cercana.nombre}`})
+        const horasK = calcularHorasTrabajadas(h, ""); // No registró salida - 8h
+        if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:K',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel,nombreFinal,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',horasK]]}})
+        else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!C${idx+1}:K${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[[fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',horasK]]}})
+        await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreFinal} en ${cercana.nombre} (${Math.round(dMin)}m)`})
       }else{
-        if(hoy[5]){ await sock.sendMessage(jid,{text:`Salida ya registrada ${hoy[5]} en ${hoy[8]||''}`}); return }
-        if(dMin>150){ await sock.sendMessage(jid,{text:`❌ No puedes checar salida a ${Math.round(dMin)}m de ${cercana.nombre}. Max 150m.`},{quoted:m}); return }
+        // SALIDA
+        if(hoy[5]){ await sock.sendMessage(jid,{text:`Salida ya registrada ${hoy[5]} en ${hoy[8]||''} - ${hoy[10]||''}`}); return }
+
+        // Validación cruzada Servicio Hotel -> Coyoacan
+        const sucEntrada = hoy[6] || '';
+        if(sucEntrada.toLowerCase().includes('hotel') &&!cercana.nombre.toLowerCase().includes('coyoacan')){
+          await sock.sendMessage(jid,{text:`❌ Entraste en Servicio Hotel, debes checar salida en Trinidad Coyoacan. Estás en ${cercana.nombre}`},{quoted:m});
+          return;
+        }
+
+        if(dMin>cercana.rSal){ await sock.sendMessage(jid,{text:`❌ No puedes checar salida a ${Math.round(dMin)}m de ${cercana.nombre}. Max ${cercana.rSal}m.`},{quoted:m}); return }
         const h=horaMX()
-        await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!F${idx+1}:J${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString()]]}})
-        await sock.sendMessage(jid,{text:`Salida ${nombreFinal} - ${cercana.nombre}`})
+        const horasReales = calcularHorasTrabajadas(hoy[3], h);
+        await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!F${idx+1}:K${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),horasReales]]}})
+        await sock.sendMessage(jid,{text:`Salida ${nombreFinal} - ${cercana.nombre} - Trabajado: ${horasReales}`})
       }
     }catch(e){ console.error(e) }
   })
