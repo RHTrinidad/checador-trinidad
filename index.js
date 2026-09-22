@@ -6,21 +6,20 @@ import { createRequire } from 'module'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import cron from 'node-cron'
 const require = createRequire(import.meta.url)
 const { google } = require('googleapis')
 const ExcelJS = require('exceljs')
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID
+const GRUPO_REPORTES_ID = process.env.GRUPO_REPORTES_ID || "120363412984528459@g.us"
 
 let SUCURSALES = []
 try {
   if (process.env.SUCURSALES_JSON) {
     const parsed = JSON.parse(process.env.SUCURSALES_JSON)
     const arr = Array.isArray(parsed)? parsed : Object.values(parsed)
-    SUCURSALES = arr.map(s => ({
-      id: s.id || s.nombre, nombre: s.nombre || s.id, lat: s.lat, lng: s.lng || s.lon,
-      rEnt: 150, rSal: 150
-    }))
+    SUCURSALES = arr.map(s => ({ id: s.id || s.nombre, nombre: s.nombre || s.id, lat: s.lat, lng: s.lng || s.lon, rEnt: 150, rSal: 150 }))
   } else throw new Error('no json')
 } catch (e) {
   SUCURSALES = [
@@ -71,7 +70,7 @@ async function getDescansosMap(){
 async function resumenEmpleado(nombreBuscar, jidRespuesta, sock){
   const sClient=await sheetsClient()
   const [asisRes, descansosMap]=await Promise.all([
-    sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID, range:'Asistencia!A2:K'}),
+    sClient.spreadsheets.values.get({spreadsheetId: SPREADSHEET_ID, range:'Asistencia!A2:K'}),
     getDescansosMap()
   ])
   const filas=asisRes.data.values||[]; const buscar=nombreBuscar.toLowerCase().trim()
@@ -177,10 +176,31 @@ async function generarExcelSemanaYEnviar(filtroSucursal, jid, sock){
   fs.unlinkSync(filePath)
   return { total: filtradas.length, rango: `${lunesPasado.toLocaleDateString('es-MX')} al ${domingoPasado.toLocaleDateString('es-MX')}` }
 }
+async function enviarReportesAutomaticos(sock){
+  if(!GRUPO_REPORTES_ID) return
+  const jid = GRUPO_REPORTES_ID
+  try{
+    console.log('⏰ Enviando reportes automáticos...')
+    await reporteSucursal('coyoacan', jid, sock)
+    await generarExcelSemanaYEnviar('coyoacan', jid, sock)
+    await new Promise(r=>setTimeout(r,2000))
+    await reporteSucursal('juarez', jid, sock)
+    await generarExcelSemanaYEnviar('juarez', jid, sock)
+    await sock.sendMessage(jid,{text:`✅ Reportes automáticos - ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}`})
+  }catch(e){ console.error('Error reporte auto:', e) }
+}
 
 const app = express(); let lastQR=null
 app.get('/', (req,res)=> res.send('Bot OK - /qr'))
 app.get('/qr', async (req,res)=>{ if(!lastQR) return res.send('No QR'); const dataUrl=await QRCode.toDataURL(lastQR); res.send(`<img src="${dataUrl}" style="width:350px">`) })
+app.get('/test-reporte', async (req,res)=>{
+  try{
+    const { state } = await useMultiFileAuthState('/app/auth')
+    const sock = makeWASocket({ auth: state })
+    await enviarReportesAutomaticos(sock)
+    res.send('Reporte enviado a '+GRUPO_REPORTES_ID)
+  }catch(e){ res.send('Error: '+e.message) }
+})
 app.listen(process.env.PORT||3000)
 
 async function start(){
@@ -190,7 +210,11 @@ async function start(){
   sock.ev.on('connection.update', async ({connection, lastDisconnect, qr}) => {
     if (qr) { lastQR = qr; qrcodeTerminal.generate(qr,{small:false}) }
     if (connection === 'close') { const shouldReconnect = lastDisconnect?.error?.output?.statusCode!==DisconnectReason.loggedOut; if(shouldReconnect) start() }
-    if (connection === 'open') console.log('✅ CONECTADO')
+    if (connection === 'open') {
+      console.log('✅ CONECTADO')
+      cron.schedule('0 7 * * 1', () => { enviarReportesAutomaticos(sock) }, { timezone: 'America/Mexico_City' })
+      console.log('⏰ Cron lunes 7am CDMX activado para '+GRUPO_REPORTES_ID)
+    }
   })
   sock.ev.on('messages.upsert', async ({messages})=>{
     try{
@@ -199,8 +223,6 @@ async function start(){
       const rawId=realPn||pnFromStore||rawLid||jid; const tel=rawId.replace(/\D/g,'')
       const texto=m.message?.conversation||m.message?.extendedTextMessage?.text||m.message?.imageMessage?.caption||''; const loc=m.message?.locationMessage
       if(texto.trim().toLowerCase()==='id'){ await sock.sendMessage(jid,{text:`ID: ${jid}`}); return }
-
-      // COMANDO RESUMEN (persona o sucursal)
       if(texto.toLowerCase().startsWith('resumen ')){
         const txtLow = texto.toLowerCase()
         if(txtLow.includes('bucareli') || txtLow.includes('juarez') || txtLow.includes('coyo') || txtLow.includes('hotel')){
@@ -210,12 +232,11 @@ async function start(){
           else if(txtLow.includes('coyo')) suc = 'coyoacan'
           await reporteSucursal(suc, jid, sock)
           const info = await generarExcelSemanaYEnviar(suc, jid, sock)
-          await sock.sendMessage(jid,{text:`✅ Excel ${suc} - ${info.total} registros - ${info.rango}\nhttps://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}`})
+          await sock.sendMessage(jid,{text:`✅ Excel ${suc} - ${info.total} registros - ${info.rango}`})
           return
         }
         await resumenEmpleado(texto.slice(8).trim(), jid, sock); return
       }
-
       if(/^(reporte|checador)/i.test(texto)){
         const txtLow = texto.toLowerCase()
         let suc = 'coyoacan'
@@ -227,19 +248,15 @@ async function start(){
         await sock.sendMessage(jid,{text:`✅ Excel ${suc} - ${info.total} registros - ${info.rango}`})
         return
       }
-
       const esEntrada=/entr|ingres|lle?gue|aqui estoy|presente/i.test(texto); const esSalida=/salid|me voy|adios|bye/i.test(texto)
       if(!loc){ if(esEntrada) await sock.sendMessage(jid,{text:'Envía tu ubicación para entrada'},{quoted:m}); if(esSalida) await sock.sendMessage(jid,{text:'Envía tu ubicación para salida'},{quoted:m}); return }
-
       const lat=loc.degreesLatitude, lng=loc.degreesLongitude
       let cercana=null,dMin=Infinity; for(const s of SUCURSALES){ const d=distM(lat,lng,s.lat,s.lng); if(d<dMin){dMin=d; cercana=s} }
-
       const empRows=await getRows('Empleados!A:G')
       let emp = empRows.slice(1).find(r=>r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10))
       if(!emp && rawLid.includes('@lid') && m.pushName){ emp = empRows.slice(1).find(r=> r[1] && r[1].toLowerCase().includes(m.pushName.toLowerCase().split(' ')[0])) }
       const nombreRegistrado = emp? emp[1] : null
       const nombreFinal = nombreRegistrado || m.pushName || tel
-
       const fLab=fechaLaboral(); const asisRows=await getRows('Asistencia!A:K'); const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)&&r[2]===fLab)
       const hoy=idx>-1?asisRows[idx]:null; const sClient=await sheetsClient()
       let estatus='A TIEMPO'; let horaProg=null
@@ -249,7 +266,6 @@ async function start(){
         else { const baseRows=await getRows('Horario_Base!A:J'); const baseRow=baseRows.slice(1).find(r=>r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)); if(baseRow){ const fecha=new Date(fLab+'T12:00:00'); const mapa={1:3,2:4,3:5,4:6,5:7,6:8,0:9}; const valor=baseRow[mapa[fecha.getDay()]]||''; if(valor.toLowerCase().includes('descanso')) estatus='DESCANSO'; else horaProg=valor } }
         if(horaProg){ const hp=horaProg.toString().match(/\d{1,2}:\d{2}/)?.[0]||horaProg; const dif=minutos(horaMX())-minutos(hp); if(dif>15) estatus=`RETARDO ${dif}min (Prog ${hp})`; else estatus=`A TIEMPO Prog ${hp}` }
       }catch{}
-
       if(!hoy ||!hoy[3]){
         if(dMin>cercana.rEnt){ await sock.sendMessage(jid,{text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}, estas a ${Math.round(dMin)}m`},{quoted:m}); return }
         const h=horaMX()
