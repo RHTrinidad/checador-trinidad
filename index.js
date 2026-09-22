@@ -169,7 +169,6 @@ async function reporteSucursal(filtroSucursal, jid, sock, tipo='pasada'){
       const low = v.toLowerCase()
       if(!v || low.includes('descanso')) continue
       if(low.includes('libre') || low.includes('flex')) {
-        // LIBRE solo cuenta como falta después de las 20:00 para dejarlo entrar cuando quiera
         if(horaActual < 20*60) continue
       }
       const tel = (r[0]||'').replace(/\D/g,'').slice(-10)
@@ -186,7 +185,6 @@ async function reporteSucursal(filtroSucursal, jid, sock, tipo='pasada'){
       txt+=`\n✅ *Sin faltas hasta ahora*`
     }
   }
-
   await sock.sendMessage(jid,{text:txt})
 }
 
@@ -205,12 +203,28 @@ async function enviarReportesAutomaticos(sock){
   const jid=GRUPO_REPORTES_ID; try{ await reporteSucursal('coyoacan',jid,sock,'pasada'); await generarExcelSemanaYEnviar('coyoacan',jid,sock,'pasada'); await new Promise(r=>setTimeout(r,2000)); await reporteSucursal('juarez',jid,sock,'pasada'); await generarExcelSemanaYEnviar('juarez',jid,sock,'pasada'); await sock.sendMessage(jid,{text:`✅ Reportes automáticos - ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}`}) }catch(e){ console.error(e) }
 }
 
+// --- SISTEMA ANTI-DUPLICADOS ---
 let avisosHoy = new Set()
+const AVISOS_FILE = '/app/auth/avisos.json'
+try{
+  if(fs.existsSync(AVISOS_FILE)){
+    const data = JSON.parse(fs.readFileSync(AVISOS_FILE,'utf8'))
+    avisosHoy = new Set(data)
+    console.log(`Avisos cargados: ${avisosHoy.size}`)
+  }
+}catch(e){}
+function guardarAvisos(){
+  try{ fs.writeFileSync(AVISOS_FILE, JSON.stringify([...avisosHoy])) }catch{}
+}
+
 async function verificarFaltasYRetardos(sock){
   const ahoraMX = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}))
   const fLab = fechaLaboral()
   const horaActualMin = minutos(horaMX())
-  if(horaActualMin < 30) avisosHoy.clear()
+  if(horaActualMin < 30){
+    avisosHoy.clear()
+    guardarAvisos()
+  }
   try{
     const [baseRows, asisRows] = await Promise.all([
       getRows('Horario_Base!A2:K'),
@@ -220,7 +234,7 @@ async function verificarFaltasYRetardos(sock){
       const tel = (r[0]||'').replace(/\D/g,'').slice(-10)
       const nombre = r[1]||tel
       if(!tel) continue
-      const clave = tel+fLab
+      const clave = tel+'_'+fLab
       if(avisosHoy.has(clave)) continue
       const diaNum = ahoraMX.getDay()
       const mapa = {1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
@@ -235,6 +249,7 @@ async function verificarFaltasYRetardos(sock){
         const yaCheco = asisRows.some(a => a[0]?.replace(/\D/g,'').slice(-10)===tel && a[2]===fLab && a[3])
         if(!yaCheco){
           avisosHoy.add(clave)
+          guardarAvisos()
           await sock.sendMessage(GRUPO_REPORTES_ID, {text: `⚠️ *NO HA LLEGADO* - ${nombre}\nProg: ${horaProg} - Ahora: ${horaMX()} (${dif} min tarde)\n${fLab}`})
         }
       }
