@@ -73,7 +73,7 @@ async function getHorarioBaseMap(){
           if(hora) horas[numDia] = hora
         }
       }
-      const obj = { descansos, horas, nombreOriginal: f[1], tel }
+      const obj = { descansos, horas, nombreOriginal: f[1], tel, sucursal: f[2]||'' }
       if(tel) map[tel]=obj
       map[nombre]=obj
       const primer = nombre.split(' ')[0]
@@ -120,12 +120,69 @@ async function resumenEmpleado(nombreBuscar, jidRespuesta, sock, tipo='actual'){
   if(diasSem>0) await generarExcelEmpleado(buscar, jidRespuesta, sock, tipo)
 }
 
+// REPORTE CORREGIDO CON FALTAS
 async function reporteSucursal(filtroSucursal, jid, sock, tipo='pasada'){
-  const asisRes=await (await sheetsClient()).spreadsheets.values.get({spreadsheetId: SPREADSHEET_ID, range:'Asistencia!A2:K'}); const filas=asisRes.data.values||[]; const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
+  const [asisRes, baseRows] = await Promise.all([
+    (await sheetsClient()).spreadsheets.values.get({spreadsheetId: SPREADSHEET_ID, range:'Asistencia!A2:K'}),
+    getRows('Horario_Base!A2:K')
+  ])
+  const filas=asisRes.data.values||[]; const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
   const filtro=filtroSucursal.toLowerCase(); const esCoyo=filtro.includes('coyo'); const esJuarez=filtro.includes('juarez')||filtro.includes('bucareli')
+
   let datos={}
-  for(const f of filas){ const fe=parseFechaMX(f[2]); if(!fe||fe<lunes||fe>domingo) continue; const suc=((f[6]||'')+' '+(f[8]||'')).toLowerCase(); let inc=false; if(esCoyo) inc=suc.includes('coyo')||suc.includes('hotel'); else if(esJuarez) inc=suc.includes('juarez')||suc.includes('bucareli'); else inc=suc.includes(filtro); if(!inc) continue; const n=f[1]||'Desconocido'; if(!datos[n]) datos[n]={dias:0,ret:0,min:0,sin:0,horas:[]}; datos[n].dias++; const m=(f[4]||'').match(/(\d+)\s*min/); if(m){datos[n].ret++; datos[n].min+=parseInt(m[1])} if(!f[5]) datos[n].sin++; if(f[10]) datos[n].horas.push(f[10]) }
-  let txt=`📊 *REPORTE ${filtroSucursal.toUpperCase()}* - ${tipo}\n${rangoTxt}\n${esCoyo?'Incluye: Coyoacán + Servicio Hotel\n':''}\n`; if(!Object.keys(datos).length) txt+='Sin registros'; else for(const n in datos){ const d=datos[n]; txt+=`\n*${n}*: ${d.dias} días | Ret ${d.ret} (${d.min}m) | Sin salida: ${d.sin} | Horas: ${d.horas.join(', ')||'8, 8'}\n` }
+  for(const f of filas){
+    const fe=parseFechaMX(f[2]); if(!fe||fe<lunes||fe>domingo) continue
+    const suc=((f[6]||'')+' '+(f[8]||'')).toLowerCase()
+    let inc=false
+    if(esCoyo) inc=suc.includes('coyo')||suc.includes('hotel')
+    else if(esJuarez) inc=suc.includes('juarez')||suc.includes('bucareli')
+    else inc=suc.includes(filtro)
+    if(!inc) continue
+    const n=f[1]||'Desconocido'
+    if(!datos[n]) datos[n]={dias:0,ret:0,min:0,sin:0,horas:[], fechas:new Set()}
+    if(!datos[n].fechas.has(f[2])){ datos[n].fechas.add(f[2]); datos[n].dias++ }
+    const m=(f[4]||'').match(/(\d+)\s*min/); if(m){datos[n].ret++; datos[n].min+=parseInt(m[1])}
+    if(!f[5]) datos[n].sin++; if(f[10]) datos[n].horas.push(f[10])
+  }
+
+  let txt=`📊 *REPORTE ${filtroSucursal.toUpperCase()}* - ${tipo}\n${rangoTxt}\n${esCoyo?'Incluye: Coyoacán + Servicio Hotel\n':''}\n`
+  if(!Object.keys(datos).length) txt+='Sin registros de asistencia\n'
+  else for(const n in datos){ const d=datos[n]; txt+=`*${n}*: ${d.dias} días | Ret ${d.ret} (${d.min}m) | Sin salida: ${d.sin} | Horas: ${d.horas.join(', ')||'8'}\n\n` }
+
+  // NUEVO: CALCULAR FALTAS DE HOY
+  if(tipo==='actual'){
+    const ahoraMX = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}))
+    const diaNum = ahoraMX.getDay()
+    const fLab = fechaLaboral()
+    const horaActual = minutos(horaMX())
+    let faltas=[]
+    for(const r of baseRows){
+      const nombre = r[1]||''; const sucBase = (r[2]||'').toLowerCase()
+      let inc=false
+      if(esCoyo) inc=sucBase.includes('coyo')||sucBase.includes('hotel')||sucBase.includes('trinidad')
+      else if(esJuarez) inc=sucBase.includes('juarez')||sucBase.includes('bucareli')
+      else inc=true
+      if(!inc) continue
+      const valorDia = (r[3+(diaNum===0?6:diaNum-1)] || '').toString()
+      // mapeo seguro por dia
+      const mapa = {1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
+      const v = (mapa[diaNum]||'').toString().trim()
+      if(!v || v.toLowerCase().includes('descanso')) continue
+      const horaProg = v.match(/(\d{1,2}:\d{2})/)?.[0]
+      if(!horaProg) continue
+      const tel = (r[0]||'').replace(/\D/g,'').slice(-10)
+      const yaCheco = filas.some(f => f[0]?.replace(/\D/g,'').slice(-10)===tel && f[2]===fLab && f[3])
+      if(!yaCheco && horaActual >= minutos(horaProg)){
+        faltas.push(`• ${nombre} - Prog ${horaProg} - ❌ NO LLEGÓ (${Math.max(0,horaActual-minutos(horaProg))}m tarde)`)
+      }
+    }
+    if(faltas.length){
+      txt+=`\n❌ *FALTAS HOY ${fLab} (${faltas.length}):*\n`+faltas.join('\n')
+    } else {
+      txt+=`\n✅ *Sin faltas hasta ahora - todos los programados ya checaron*`
+    }
+  }
+
   await sock.sendMessage(jid,{text:txt})
 }
 
@@ -144,40 +201,35 @@ async function enviarReportesAutomaticos(sock){
   const jid=GRUPO_REPORTES_ID; try{ await reporteSucursal('coyoacan',jid,sock,'pasada'); await generarExcelSemanaYEnviar('coyoacan',jid,sock,'pasada'); await new Promise(r=>setTimeout(r,2000)); await reporteSucursal('juarez',jid,sock,'pasada'); await generarExcelSemanaYEnviar('juarez',jid,sock,'pasada'); await sock.sendMessage(jid,{text:`✅ Reportes automáticos - ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}`}) }catch(e){ console.error(e) }
 }
 
-// === NUEVO: ALERTA 20 MIN DESPUES DE ENTRADA ===
 let avisosHoy = new Set()
 async function verificarFaltasYRetardos(sock){
   const ahoraMX = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}))
   const fLab = fechaLaboral()
   const horaActualMin = minutos(horaMX())
-  if(horaActualMin < 30) avisosHoy.clear() // reset diario
-
+  if(horaActualMin < 30) avisosHoy.clear()
   try{
-    const [baseMap, asisRows] = await Promise.all([
-      getHorarioBaseMap(),
-      getRows('Asistencia!A:K')
+    const [baseRows, asisRows] = await Promise.all([
+      getRows('Horario_Base!A2:K'),
+      getRows('Asistencia!A2:K')
     ])
-    const empleadosUnicos = {}
-    for(const k in baseMap){
-      const info = baseMap[k]
-      if(info.tel &&!empleadosUnicos[info.tel]) empleadosUnicos[info.tel]=info
-    }
-
-    for(const tel in empleadosUnicos){
-      const info = empleadosUnicos[tel]
-      const claveAviso = tel+fLab
-      if(avisosHoy.has(claveAviso)) continue
+    for(const r of baseRows){
+      const tel = (r[0]||'').replace(/\D/g,'').slice(-10)
+      const nombre = r[1]||tel
+      if(!tel) continue
+      const clave = tel+fLab
+      if(avisosHoy.has(clave)) continue
       const diaNum = ahoraMX.getDay()
-      if(info.descansos.has(diaNum)) continue
-      const horaProg = info.horas[diaNum]
+      const mapa = {1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
+      const v = (mapa[diaNum]||'').toString().trim()
+      if(!v || v.toLowerCase().includes('descanso')) continue
+      const horaProg = v.match(/(\d{1,2}:\d{2})/)?.[0]
       if(!horaProg) continue
-      const progMin = minutos(horaProg)
-      const dif = horaActualMin - progMin
+      const dif = horaActualMin - minutos(horaProg)
       if(dif >= 20 && dif < 180){
-        const yaCheco = asisRows.some(r => r[0]?.replace(/\D/g,'').slice(-10)===tel.slice(-10) && r[2]===fLab && r[3])
+        const yaCheco = asisRows.some(a => a[0]?.replace(/\D/g,'').slice(-10)===tel && a[2]===fLab && a[3])
         if(!yaCheco){
-          avisosHoy.add(claveAviso)
-          await sock.sendMessage(GRUPO_REPORTES_ID, {text: `⚠️ *FALTA / RETARDO* - ${info.nombreOriginal} no ha checado entrada\nProgramado: ${horaProg} - Actual: ${horaMX()} (${dif} min tarde)\nFecha: ${fLab}`})
+          avisosHoy.add(clave)
+          await sock.sendMessage(GRUPO_REPORTES_ID, {text: `⚠️ *NO HA LLEGADO* - ${nombre}\nProg: ${horaProg} - Ahora: ${horaMX()} (${dif} min tarde)\n${fLab}`})
         }
       }
     }
