@@ -76,9 +76,8 @@ async function getHorarioBaseMap(){
       const obj = { descansos, horas, nombreOriginal: f[1], tel }
       if(tel) map[tel]=obj
       map[nombre]=obj
-      // también por primer nombre
       const primer = nombre.split(' ')[0]
-      if(primer) map[primer]=obj
+      if(primer &&!map[primer]) map[primer]=obj
     }
     return map
   }catch(e){ return {} }
@@ -145,6 +144,46 @@ async function enviarReportesAutomaticos(sock){
   const jid=GRUPO_REPORTES_ID; try{ await reporteSucursal('coyoacan',jid,sock,'pasada'); await generarExcelSemanaYEnviar('coyoacan',jid,sock,'pasada'); await new Promise(r=>setTimeout(r,2000)); await reporteSucursal('juarez',jid,sock,'pasada'); await generarExcelSemanaYEnviar('juarez',jid,sock,'pasada'); await sock.sendMessage(jid,{text:`✅ Reportes automáticos - ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}`}) }catch(e){ console.error(e) }
 }
 
+// === NUEVO: ALERTA 20 MIN DESPUES DE ENTRADA ===
+let avisosHoy = new Set()
+async function verificarFaltasYRetardos(sock){
+  const ahoraMX = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}))
+  const fLab = fechaLaboral()
+  const horaActualMin = minutos(horaMX())
+  if(horaActualMin < 30) avisosHoy.clear() // reset diario
+
+  try{
+    const [baseMap, asisRows] = await Promise.all([
+      getHorarioBaseMap(),
+      getRows('Asistencia!A:K')
+    ])
+    const empleadosUnicos = {}
+    for(const k in baseMap){
+      const info = baseMap[k]
+      if(info.tel &&!empleadosUnicos[info.tel]) empleadosUnicos[info.tel]=info
+    }
+
+    for(const tel in empleadosUnicos){
+      const info = empleadosUnicos[tel]
+      const claveAviso = tel+fLab
+      if(avisosHoy.has(claveAviso)) continue
+      const diaNum = ahoraMX.getDay()
+      if(info.descansos.has(diaNum)) continue
+      const horaProg = info.horas[diaNum]
+      if(!horaProg) continue
+      const progMin = minutos(horaProg)
+      const dif = horaActualMin - progMin
+      if(dif >= 20 && dif < 180){
+        const yaCheco = asisRows.some(r => r[0]?.replace(/\D/g,'').slice(-10)===tel.slice(-10) && r[2]===fLab && r[3])
+        if(!yaCheco){
+          avisosHoy.add(claveAviso)
+          await sock.sendMessage(GRUPO_REPORTES_ID, {text: `⚠️ *FALTA / RETARDO* - ${info.nombreOriginal} no ha checado entrada\nProgramado: ${horaProg} - Actual: ${horaMX()} (${dif} min tarde)\nFecha: ${fLab}`})
+        }
+      }
+    }
+  }catch(e){ console.log('verificarFaltas err', e.message) }
+}
+
 const app=express(); let lastQR=null; let globalSock=null
 app.get('/',(req,res)=>res.send('Bot OK - /qr')); app.get('/qr',async(req,res)=>{ if(!lastQR) return res.send('No QR'); const dataUrl=await QRCode.toDataURL(lastQR); res.send(`<img src="${dataUrl}" style="width:350px">`) }); app.listen(process.env.PORT||3000)
 
@@ -155,7 +194,11 @@ async function start(){
   sock.ev.on('connection.update', async ({connection, lastDisconnect, qr}) => {
     if (qr) { lastQR = qr; qrcodeTerminal.generate(qr,{small:false}) }
     if (connection === 'close') { const shouldReconnect = lastDisconnect?.error?.output?.statusCode!==DisconnectReason.loggedOut; if(shouldReconnect) start() }
-    if (connection === 'open') { console.log('✅ CONECTADO'); cron.schedule('0 7 * * 1', () => { enviarReportesAutomaticos(globalSock) }, { timezone: 'America/Mexico_City' }) }
+    if (connection === 'open') {
+      console.log('✅ CONECTADO');
+      cron.schedule('0 7 * * 1', () => { enviarReportesAutomaticos(globalSock) }, { timezone: 'America/Mexico_City' })
+      cron.schedule('*/5 * * * *', () => { verificarFaltasYRetardos(globalSock) }, { timezone: 'America/Mexico_City' })
+    }
   })
   sock.ev.on('messages.upsert', async ({messages})=>{
     try{
@@ -185,7 +228,6 @@ async function start(){
       const empRows=await getRows('Empleados!A:G'); let emp=empRows.slice(1).find(r=>r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)); if(!emp&&rawLid.includes('@lid')&&m.pushName){ emp=empRows.slice(1).find(r=> r[1]&&r[1].toLowerCase().includes(m.pushName.toLowerCase().split(' ')[0])) }
       const nombreFinal=emp?emp[1]:m.pushName||tel; const fLab=fechaLaboral(); const asisRows=await getRows('Asistencia!A:K'); const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)&&r[2]===fLab); const hoy=idx>-1?asisRows[idx]:null; const sClient=await sheetsClient()
 
-      // LECTURA DESDE HORARIO_BASE (tu foto)
       const baseMap = await getHorarioBaseMap()
       const keyTel = tel.slice(-10)
       const baseInfo = baseMap[keyTel] || baseMap[nombreFinal.toLowerCase()] || baseMap[nombreFinal.toLowerCase().split(' ')[0]] || null
