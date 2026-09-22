@@ -66,8 +66,11 @@ async function getHorarioBaseMap(){
       const horas = {}
       for(const [numDia, valor] of Object.entries(dias)){
         const v = (valor||'').toString().trim()
-        if(!v || v.toLowerCase().includes('descanso')){
+        const low = v.toLowerCase()
+        if(!v || low.includes('descanso')){
           descansos.add(parseInt(numDia))
+        } else if(low.includes('libre') || low.includes('flex') || low.includes('abierto') || low.includes('comodin')){
+          horas[numDia] = 'LIBRE'
         } else {
           const hora = v.match(/(\d{1,2}:\d{2})/)?.[0]
           if(hora) horas[numDia] = hora
@@ -120,7 +123,6 @@ async function resumenEmpleado(nombreBuscar, jidRespuesta, sock, tipo='actual'){
   if(diasSem>0) await generarExcelEmpleado(buscar, jidRespuesta, sock, tipo)
 }
 
-// REPORTE CORREGIDO CON FALTAS
 async function reporteSucursal(filtroSucursal, jid, sock, tipo='pasada'){
   const [asisRes, baseRows] = await Promise.all([
     (await sheetsClient()).spreadsheets.values.get({spreadsheetId: SPREADSHEET_ID, range:'Asistencia!A2:K'}),
@@ -149,7 +151,6 @@ async function reporteSucursal(filtroSucursal, jid, sock, tipo='pasada'){
   if(!Object.keys(datos).length) txt+='Sin registros de asistencia\n'
   else for(const n in datos){ const d=datos[n]; txt+=`*${n}*: ${d.dias} días | Ret ${d.ret} (${d.min}m) | Sin salida: ${d.sin} | Horas: ${d.horas.join(', ')||'8'}\n\n` }
 
-  // NUEVO: CALCULAR FALTAS DE HOY
   if(tipo==='actual'){
     const ahoraMX = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}))
     const diaNum = ahoraMX.getDay()
@@ -163,23 +164,26 @@ async function reporteSucursal(filtroSucursal, jid, sock, tipo='pasada'){
       else if(esJuarez) inc=sucBase.includes('juarez')||sucBase.includes('bucareli')
       else inc=true
       if(!inc) continue
-      const valorDia = (r[3+(diaNum===0?6:diaNum-1)] || '').toString()
-      // mapeo seguro por dia
       const mapa = {1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
       const v = (mapa[diaNum]||'').toString().trim()
-      if(!v || v.toLowerCase().includes('descanso')) continue
-      const horaProg = v.match(/(\d{1,2}:\d{2})/)?.[0]
-      if(!horaProg) continue
+      const low = v.toLowerCase()
+      if(!v || low.includes('descanso')) continue
+      if(low.includes('libre') || low.includes('flex')) {
+        // LIBRE solo cuenta como falta después de las 20:00 para dejarlo entrar cuando quiera
+        if(horaActual < 20*60) continue
+      }
       const tel = (r[0]||'').replace(/\D/g,'').slice(-10)
       const yaCheco = filas.some(f => f[0]?.replace(/\D/g,'').slice(-10)===tel && f[2]===fLab && f[3])
-      if(!yaCheco && horaActual >= minutos(horaProg)){
-        faltas.push(`• ${nombre} - Prog ${horaProg} - ❌ NO LLEGÓ (${Math.max(0,horaActual-minutos(horaProg))}m tarde)`)
+      if(!yaCheco){
+        const esLibre = low.includes('libre') || low.includes('flex')
+        const horaProg = v.match(/(\d{1,2}:\d{2})/)?.[0] || (esLibre? 'LIBRE' : '')
+        faltas.push(`• ${nombre} - Prog ${horaProg} - ❌ NO LLEGÓ${horaProg!=='LIBRE'? ` (${Math.max(0,horaActual-minutos(horaProg))}m tarde)` : ''}`)
       }
     }
     if(faltas.length){
-      txt+=`\n❌ *FALTAS HOY ${fLab} (${faltas.length}):*\n`+faltas.join('\n')
+      txt+=`\n❌ *FALTAS HOY ${fechaLaboral()} (${faltas.length}):*\n`+faltas.join('\n')
     } else {
-      txt+=`\n✅ *Sin faltas hasta ahora - todos los programados ya checaron*`
+      txt+=`\n✅ *Sin faltas hasta ahora*`
     }
   }
 
@@ -221,7 +225,9 @@ async function verificarFaltasYRetardos(sock){
       const diaNum = ahoraMX.getDay()
       const mapa = {1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
       const v = (mapa[diaNum]||'').toString().trim()
-      if(!v || v.toLowerCase().includes('descanso')) continue
+      const low = v.toLowerCase()
+      if(!v || low.includes('descanso')) continue
+      if(low.includes('libre') || low.includes('flex')) continue
       const horaProg = v.match(/(\d{1,2}:\d{2})/)?.[0]
       if(!horaProg) continue
       const dif = horaActualMin - minutos(horaProg)
@@ -292,10 +298,14 @@ async function start(){
           estatus='DESCANSO'
         } else if(baseInfo.horas[diaNum]){
           horaProg=baseInfo.horas[diaNum]
-          const hp=horaProg.match(/(\d{1,2}:\d{2})/)?.[0]||horaProg
-          const dif=minutos(horaMX())-minutos(hp)
-          if(dif>15) estatus=`RETARDO ${dif}min (Prog ${hp})`
-          else estatus=`A TIEMPO Prog ${hp}`
+          if(horaProg==='LIBRE'){
+            estatus='LIBRE - A TIEMPO (horario libre)'
+          } else {
+            const hp=horaProg.match(/(\d{1,2}:\d{2})/)?.[0]||horaProg
+            const dif=minutos(horaMX())-minutos(hp)
+            if(dif>15) estatus=`RETARDO ${dif}min (Prog ${hp})`
+            else estatus=`A TIEMPO Prog ${hp}`
+          }
         }
       }
 
