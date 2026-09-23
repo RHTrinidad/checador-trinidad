@@ -101,7 +101,6 @@ async function getHorarioBaseMap(){
   }catch(e){ return {} }
 }
 
-// ========= NUEVO: ASISTENCIA HOY CON MINUTOS Y HOTEL A COYOACAN =========
 async function asistenciaHoy(filtroSucursal, jid, sock){
   const sClient = await sheetsClient()
   const [baseRows, asisRows] = await Promise.all([
@@ -177,7 +176,6 @@ async function asistenciaHoy(filtroSucursal, jid, sock){
   await sock.sendMessage(jid,{text:txt})
 }
 
-// ========= AUTOCIERRE 16H DESPUES CONTANDO 8H =========
 async function autocierreAsistencia(){
   const sClient = await sheetsClient()
   const asisRows = await getRows('Asistencia!A2:K')
@@ -381,7 +379,13 @@ app.get('/',(req,res)=>res.send('Bot OK - /qr')); app.get('/qr',async(req,res)=>
 
 async function start(){
   const { state, saveCreds } = await useMultiFileAuthState('/app/auth')
-  const sock=makeWASocket({ auth:state, printQRInTerminal:false, markOnlineOnConnect:false })
+  const sock=makeWASocket({
+    auth:state,
+    printQRInTerminal:false,
+    markOnlineOnConnect:false,
+    shouldIgnoreJid: j=> j.includes('broadcast'),
+    getMessage: async () => undefined
+  })
   globalSock=sock; sock.ev.on('creds.update', saveCreds)
   sock.ev.on('connection.update', async ({connection, lastDisconnect, qr}) => {
     if (qr) { lastQR = qr; qrcodeTerminal.generate(qr,{small:false}) }
@@ -393,10 +397,15 @@ async function start(){
       cron.schedule('*/15 * * * *', () => { autocierreAsistencia() }, { timezone: 'America/Mexico_City' })
     }
   })
+
   sock.ev.on('messages.upsert', async ({messages})=>{
     try{
       const m=messages[0]; if(!m||m.key.fromMe) return; const jid=m.key.remoteJid; if(!jid.endsWith('@g.us')) return
-      const rawLid=m.key.participant||''; const realPn=m.key.participantPn||m.key.participantAlt||''; let pnFromStore=''; try{ pnFromStore=await sock.signalRepository?.lidMapping?.getPNForLID(rawLid)||'' }catch{}; const rawId=realPn||pnFromStore||rawLid||jid; const tel=rawId.replace(/\D/g,'')
+      const rawLid=m.key.participant||''; const realPn=m.key.participantPn||m.key.participantAlt||'';
+      let pnFromStore=''; try{ pnFromStore=await sock.signalRepository?.lidMapping?.getPNForLID(rawLid)||'' }catch{}
+      const rawId=realPn||pnFromStore||rawLid||jid;
+      let tel=(rawId||'').toString().replace(/\D/g,''); let tel10=tel.slice(-10)
+
       const texto=m.message?.conversation||m.message?.extendedTextMessage?.text||m.message?.imageMessage?.caption||''; const loc=m.message?.locationMessage
       if(texto.trim().toLowerCase()==='id'){ await sock.sendMessage(jid,{text:`ID: ${jid}`}); return }
 
@@ -425,12 +434,53 @@ async function start(){
       const esEntrada=/entr|ingres|lle?gue|aqui estoy|presente/i.test(texto); const esSalida=/salid|me voy|adios|bye/i.test(texto)
       if(!loc){ if(esEntrada) await sock.sendMessage(jid,{text:'Envía tu ubicación para entrada'},{quoted:m}); if(esSalida) await sock.sendMessage(jid,{text:'Envía tu ubicación para salida'},{quoted:m}); return }
       const lat=loc.degreesLatitude,lng=loc.degreesLongitude; let cercana=null,dMin=Infinity; for(const s of SUCURSALES){ const d=distM(lat,lng,s.lat,s.lng); if(d<dMin){dMin=d; cercana=s} }
-      const empRows=await getRows('Empleados!A:G'); let emp=empRows.slice(1).find(r=>r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)); if(!emp&&rawLid.includes('@lid')&&m.pushName){ emp=empRows.slice(1).find(r=> r[1]&&r[1].toLowerCase().includes(m.pushName.toLowerCase().split(' ')[0])) }
-      const nombreFinal=emp?emp[1]:m.pushName||tel; const fLab=fechaLaboral(); const asisRows=await getRows('Asistencia!A:K'); const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel.slice(-10)&&r[2]===fLab); const hoy=idx>-1?asisRows[idx]:null; const sClient=await sheetsClient()
+
+      // ===== INICIO FIX LID + NOMBRE REGISTRADO =====
+      const empRowsFull = await getRows('Empleados!A:H')
+      let emp = null
+
+      if(tel10.length >= 10){
+        emp = empRowsFull.slice(1).find(r=> r[0]&& r[0].replace(/\D/g,'').slice(-10)===tel10)
+        // guarda LID para futuro
+        if(emp && rawLid.includes('@lid') &&!emp[7]){
+          try{
+            const idxEmp = empRowsFull.findIndex((r,i)=> i>0 && r[0]===emp[0] && r[1]===emp[1])
+            if(idxEmp>-1){
+              const cli = await sheetsClient()
+              await cli.spreadsheets.values.update({
+                spreadsheetId: SPREADSHEET_ID,
+                range:`Empleados!H${idxEmp+1}`,
+                valueInputOption:'USER_ENTERED',
+                requestBody:{values:[[rawLid]]}
+              })
+              console.log(`LID guardado ${emp[1]} -> ${rawLid}`)
+            }
+          }catch(e){ console.log('error guardando LID', e.message)}
+        }
+      }
+
+      // si no hay teléfono por critical_unblock_low, busca por LID que nosotros guardamos
+      if(!emp && rawLid.includes('@lid')){
+        emp = empRowsFull.slice(1).find(r=> r[7]===rawLid)
+        if(emp){
+          tel10 = (emp[0]||'').replace(/\D/g,'').slice(-10)
+          tel = emp[0]||''
+          console.log(`Recuperado por LID ${rawLid} -> ${tel10} ${emp[1]}`)
+        }
+      }
+
+      // SIEMPRE usa el nombre registrado en tu Sheets, nunca pushName
+      const nombreFinal = emp? emp[1] : (m.pushName || tel10 || 'Desconocido')
+      const telFinal = emp? (emp[0]||'').replace(/\D/g,'') : tel
+      const tel10Final = telFinal.slice(-10) || tel10
+      // ===== FIN FIX =====
+
+      const fLab=fechaLaboral(); const asisRows=await getRows('Asistencia!A:K');
+      const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10Final&&r[2]===fLab);
+      const hoy=idx>-1?asisRows[idx]:null; const sClient=await sheetsClient()
 
       const baseMap = await getHorarioBaseMap()
-      const keyTel = tel.slice(-10)
-      const baseInfo = baseMap[keyTel] || baseMap[nombreFinal.toLowerCase()] || baseMap[nombreFinal.toLowerCase().split(' ')[0]] || null
+      const baseInfo = baseMap[tel10Final] || baseMap[nombreFinal.toLowerCase()] || baseMap[nombreFinal.toLowerCase().split(' ')[0]] || null
 
       let estatus='A TIEMPO'; let horaProg=null; let esLibre=false
       if(baseInfo){
@@ -455,20 +505,16 @@ async function start(){
       if(!hoy||!hoy[3]){
         if(estatus==='DESCANSO'){
           const h=horaMX(); const horasK=calcularHorasTrabajadas(h,"");
-          if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:K',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel,nombreFinal,fLab,h,'DESCANSO (trabajado)','',cercana.nombre,Math.round(dMin).toString(),'','',horasK]]}})
+          if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:K',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel10Final,nombreFinal,fLab,h,'DESCANSO (trabajado)','',cercana.nombre,Math.round(dMin).toString(),'','',horasK]]}})
           else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!C${idx+1}:K${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[[fLab,h,'DESCANSO (trabajado)','',cercana.nombre,Math.round(dMin).toString(),'','',horasK]]}})
           await sock.sendMessage(jid,{text:`✅ Entrada registrada - ${nombreFinal} en ${cercana.nombre}`}); return
         }
         if(dMin>cercana.rEnt){ await sock.sendMessage(jid,{text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}, estas a ${Math.round(dMin)}m`},{quoted:m}); return }
         const h=horaMX(); const horasK=calcularHorasTrabajadas(h,"");
-        if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:K',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel,nombreFinal,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',horasK]]}});
+        if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:K',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel10Final,nombreFinal,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',horasK]]}});
         else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!C${idx+1}:K${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[[fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',horasK]]}});
 
-        if(esLibre){
-          await sock.sendMessage(jid,{text:`✅ Entrada registrada - ${nombreFinal} en ${cercana.nombre}`})
-        } else {
-          await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreFinal} en ${cercana.nombre} (${Math.round(dMin)}m)`})
-        }
+        await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreFinal} en ${cercana.nombre} (${Math.round(dMin)}m)`})
       }else{
         if(hoy[5]){ await sock.sendMessage(jid,{text:`Salida ya registrada ${hoy[5]} en ${hoy[8]||''}`}); return }
         const sucEntrada=hoy[6]||''; if(sucEntrada.toLowerCase().includes('hotel')&&!cercana.nombre.toLowerCase().includes('coyoacan')){ await sock.sendMessage(jid,{text:`❌ Entraste en Servicio Hotel, debes checar salida en Trinidad Coyoacan. Estás en ${cercana.nombre}`},{quoted:m}); return; }
