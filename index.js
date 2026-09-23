@@ -115,7 +115,7 @@ async function asistenciaHoy(filtroSucursal, jid, sock){
   const esCoyo = filtro.includes('coyo') || filtro.includes('hotel')
   const esJuarez = filtro.includes('juarez')||filtro.includes('bucareli')
 
-  let llego=[], retardo=[], falta=[], futuro=[], libres=[]
+  let llego=[], retardo=[], falta=[], futuro=[]
 
   for(const r of baseRows){
     const sucBase = (r[2]||'').toLowerCase()
@@ -142,7 +142,7 @@ async function asistenciaHoy(filtroSucursal, jid, sock){
       const sucEnt = registro[6]||''
       const dif = esLibre? 0 : minutos(entrada) - minutos(horaProg)
       if(esLibre){
-        libres.push(`• ${nombre} - LIBRE - Entró ${entrada} en ${sucEnt}`)
+        llego.push(`• ${nombre} - Entró ${entrada} en ${sucEnt} ✅`)
       } else if(dif > 15){
         retardo.push(`• ${nombre} - Prog ${horaProg} - Entró ${entrada} - ⏰ ${dif}m tarde - ${sucEnt}`)
       } else if(dif > 0){
@@ -154,7 +154,7 @@ async function asistenciaHoy(filtroSucursal, jid, sock){
       }
     } else {
       if(esLibre){
-        if(ahoraMin >= 20*60) falta.push(`• ${nombre} - LIBRE - ❌ ${ahoraMin - 20*60}m sin llegar (corte 20:00)`)
+        if(ahoraMin >= 20*60) falta.push(`• ${nombre} - ❌ ${ahoraMin - 20*60}m sin llegar (corte 20:00)`)
         continue
       }
       const dif = ahoraMin - minutos(horaProg)
@@ -169,7 +169,6 @@ async function asistenciaHoy(filtroSucursal, jid, sock){
   let txt = `📍 *ASISTENCIA HOY ${fLab} - ${filtroSucursal.toUpperCase()}* ${horaMX()}\n`
   if(esCoyo) txt+= `_Incluye Hotel + Coyoacán_\n`
   txt+=`\n✅ *A TIEMPO (${llego.length}):*\n${llego.join('\n')||'-'}\n\n`
-  if(libres.length) txt+=`🟦 *LIBRE (${libres.length}):*\n${libres.join('\n')}\n\n`
   txt+=`⏰ *RETARDOS (${retardo.length}):*\n${retardo.join('\n')||'-'}\n\n`
   txt+=`❌ *NO HAN LLEGADO (${falta.length}):*\n${falta.join('\n')||'Todos llegaron'}\n\n`
   txt+=`⏳ *PRÓXIMOS (${futuro.length}):*\n${futuro.join('\n')||'-'}`
@@ -435,13 +434,10 @@ async function start(){
       if(!loc){ if(esEntrada) await sock.sendMessage(jid,{text:'Envía tu ubicación para entrada'},{quoted:m}); if(esSalida) await sock.sendMessage(jid,{text:'Envía tu ubicación para salida'},{quoted:m}); return }
       const lat=loc.degreesLatitude,lng=loc.degreesLongitude; let cercana=null,dMin=Infinity; for(const s of SUCURSALES){ const d=distM(lat,lng,s.lat,s.lng); if(d<dMin){dMin=d; cercana=s} }
 
-      // ===== INICIO FIX LID + NOMBRE REGISTRADO =====
       const empRowsFull = await getRows('Empleados!A:H')
       let emp = null
-
       if(tel10.length >= 10){
         emp = empRowsFull.slice(1).find(r=> r[0]&& r[0].replace(/\D/g,'').slice(-10)===tel10)
-        // guarda LID para futuro
         if(emp && rawLid.includes('@lid') &&!emp[7]){
           try{
             const idxEmp = empRowsFull.findIndex((r,i)=> i>0 && r[0]===emp[0] && r[1]===emp[1])
@@ -453,27 +449,20 @@ async function start(){
                 valueInputOption:'USER_ENTERED',
                 requestBody:{values:[[rawLid]]}
               })
-              console.log(`LID guardado ${emp[1]} -> ${rawLid}`)
             }
-          }catch(e){ console.log('error guardando LID', e.message)}
+          }catch(e){}
         }
       }
-
-      // si no hay teléfono por critical_unblock_low, busca por LID que nosotros guardamos
       if(!emp && rawLid.includes('@lid')){
         emp = empRowsFull.slice(1).find(r=> r[7]===rawLid)
         if(emp){
           tel10 = (emp[0]||'').replace(/\D/g,'').slice(-10)
           tel = emp[0]||''
-          console.log(`Recuperado por LID ${rawLid} -> ${tel10} ${emp[1]}`)
         }
       }
-
-      // SIEMPRE usa el nombre registrado en tu Sheets, nunca pushName
       const nombreFinal = emp? emp[1] : (m.pushName || tel10 || 'Desconocido')
       const telFinal = emp? (emp[0]||'').replace(/\D/g,'') : tel
       const tel10Final = telFinal.slice(-10) || tel10
-      // ===== FIN FIX =====
 
       const fLab=fechaLaboral(); const asisRows=await getRows('Asistencia!A:K');
       const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10Final&&r[2]===fLab);
@@ -492,7 +481,7 @@ async function start(){
           horaProg=baseInfo.horas[diaNum]
           if(horaProg==='LIBRE'){
             esLibre=true
-            estatus='LIBRE - A TIEMPO (horario libre)'
+            estatus='A TIEMPO'
           } else {
             const hp=horaProg.match(/(\d{1,2}:\d{2})/)?.[0]||horaProg
             const dif=minutos(horaMX())-minutos(hp)
@@ -513,7 +502,6 @@ async function start(){
         const h=horaMX(); const horasK=calcularHorasTrabajadas(h,"");
         if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:K',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel10Final,nombreFinal,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',horasK]]}});
         else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!C${idx+1}:K${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[[fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',horasK]]}});
-
         await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreFinal} en ${cercana.nombre} (${Math.round(dMin)}m)`})
       }else{
         if(hoy[5]){ await sock.sendMessage(jid,{text:`Salida ya registrada ${hoy[5]} en ${hoy[8]||''}`}); return }
