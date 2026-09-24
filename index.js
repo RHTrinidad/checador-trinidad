@@ -19,21 +19,15 @@ try {
   if (process.env.SUCURSALES_JSON) {
     const parsed = JSON.parse(process.env.SUCURSALES_JSON)
     const arr = Array.isArray(parsed)? parsed : Object.values(parsed)
-    SUCURSALES = arr.map(s => ({ id: s.id || s.nombre, nombre: s.nombre || s.id, lat: s.lat, lng: s.lng || s.lon, rEnt: 150, rSal: 150 }))
+    SUCURSALES = arr.map(s => ({ id: s.id || s.nombre, nombre: s.nombre || s.id, lat: s.lat, lng: s.lng || s.lon, rEnt: s.rEnt || 150, rSal: s.rSal || 150 }))
   } else throw new Error('no json')
 } catch (e) {
   SUCURSALES = [
     { id:"COYOACAN", nombre:"Trinidad Coyoacan", lat:19.352525, lng:-99.161817, rEnt:150, rSal:150 },
     { id:"JUAREZ", nombre:"Trinidad Juarez", lat:19.4314119, lng:-99.1512074, rEnt:150, rSal:150 },
-    { id:"HOTEL", nombre:"Servicio Hotel", lat:19.351777, lng:-99.1680328, rEnt:150, rSal:150 }
+    { id:"HOTEL", nombre:"Servicio Hotel", lat:19.351770, lng:-99.165458, rEnt:150, rSal:150 }
   ]
 }
-SUCURSALES = SUCURSALES.map(s => {
-  if(s.id === "HOTEL" || (s.nombre||"").toLowerCase().includes("hotel")){
-    return {...s, lat: 19.351777, lng: -99.1680328 }
-  }
-  return s
-})
 
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
@@ -194,14 +188,11 @@ async function autocierreAsistencia(){
       if(diffHrs >= 16){
         await sClient.spreadsheets.values.update({
           spreadsheetId: SPREADSHEET_ID,
-          range:`Asistencia!F${i+1}:K${i+1}`,
+          range:`Asistencia!F${i+2}:K${i+2}`,
           valueInputOption:'USER_ENTERED',
           requestBody:{values:[["AUTOCIERRE 16H", r[6]||'', r[7]||'', "AUTOCIERRE", "0", "8"]]}
         })
-        console.log(`Autocierre 16h ${r[1]} - ${fecha} ${entrada} -> 8h`)
-        try{
-          await globalSock.sendMessage(GRUPO_REPORTES_ID, {text: `🔒 *AUTOCIERRE 16H (8h)* - ${r[1]}\nEntrada: ${fecha} ${entrada} en ${r[6]||''}\nSe cerró automático con 8h por no checar salida (${diffHrs.toFixed(1)}h después)`})
-        }catch{}
+        console.log(`Autocierre 16h ${r[1]} - ${fecha} ${entrada} -> 8h (sin notificacion)`)
       }
     }catch(e){ console.log('autocierre err', e.message) }
   }
