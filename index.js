@@ -227,7 +227,7 @@ async function verificarFaltasYRetardos(sock){
       const tel=(r[0]||'').replace(/\D/g,'').slice(-10); const nombre=r[1]||tel; const sucProg=r[2]||''; if(!tel) continue; const clave=tel+'_'+fLab; if(avisosCache.has(clave)) continue
       const diaNum=ahoraMX.getDay(); const mapa={1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}; const v=(mapa[diaNum]||'').toString().trim(); const parsed=parseHorarioRango(v); if(!parsed) continue; if(parsed.entrada==='LIBRE') continue
       const horaProg=parsed.entrada; const dif=horaActualMin-minutos(horaProg)
-      if(dif >= 20 && dif <= 29){ const yaCheco=asisRows.some(a=>a[0]?.replace(/\D/g,'').slice(-10)===tel && a[2]===fLab && a[3]); if(!yaCheco){ avisosCache.add(clave); try{ const sClient=await sheetsClient(); await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Avisos!A:C',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel,fLab,horaMX()]]}}) }catch(e){} await sock.sendMessage(GRUPO_REPORTES_ID, {text: `⚠️ *NO HA LLEGADO* - ${nombre}\n📍 Unidad: ${sucProg}\nProg: ${horaProg}${parsed.salida?` - ${parsed.salida}`:''} - Ahora: ${horaMX()} (${dif} min tarde)\n${fLab}`}) } }
+      if(dif >= 20 && dif <= 29){ const yaCheco=asisRows.some(a=>a[0]?.replace(/\D/g,'').slice(-10)===tel && a[2]===fLab && a[3]); if(!yaCheco){ avisosCache.add(clave); try{ const sClient=await sheetsClient(); await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Avisos!A:C',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel,fLab,horaMX()]]}}) }catch(e){} await sock.sendMessage(GRUPO_REPORTES_ID, {text: `⚠️ *NO HA LLEGADO* - ${nombre}\n📍 Unidad: ${sucProg}\nProg: ${horaProg}${parsed.salida?` - ${horaProg.salida}`:''} - Ahora: ${horaMX()} (${dif} min tarde)\n${fLab}`}) } }
     }
   }catch(e){ console.log('verificarFaltas err', e.message) }
 }
@@ -250,14 +250,72 @@ async function start(){
       const rawLid=m.key.participant||''; const realPn=m.key.participantPn||m.key.participantAlt||''; let pnFromStore=''; try{ pnFromStore=await sock.signalRepository?.lidMapping?.getPNForLID(rawLid)||'' }catch{}; const rawId=realPn||pnFromStore||rawLid||jid
       let tel=(rawId||'').toString().replace(/\D/g,''); let tel10=tel.slice(-10)
       const texto=m.message?.conversation||m.message?.extendedTextMessage?.text||m.message?.imageMessage?.caption||''; const loc=m.message?.locationMessage
+
       if(texto.trim().toLowerCase()==='id'){ await sock.sendMessage(jid,{text:`ID: ${jid}`}); return }
+
+      // ===== NUEVO: FICHA CON NOMBRE LARGO - info / datos / telefono =====
+      if(/^(numero|número|num|tel|telefono|teléfono|info|ficha|datos|dato)\s*(de)?/i.test(texto)){
+        let buscar = texto.toLowerCase().replace(/^(numero|número|num|tel|telefono|teléfono|info|ficha|datos|dato)\s*(de)?\s*/i,'').trim()
+        if(!buscar){ await sock.sendMessage(jid,{text:'Escribe: info alejandro / datos alejandro / telefono alejandro'}); return }
+        const empRows = await getRows('Empleados!A:K')
+        // A Tel, B Corto, C Suc, D Completo LARGO, E Puesto, F Ingreso, G Contacto, H Tel Emerg, I CURP, J NSS, K LID
+        const coincidencias = empRows.slice(1).filter(r=>{
+          const corto = (r[1]||'').toLowerCase()
+          const completo = (r[3]||'').toLowerCase()
+          return corto.includes(buscar) || completo.includes(buscar)
+        })
+        if(!coincidencias.length){ await sock.sendMessage(jid,{text:`No encontré a "${buscar}"`}); return }
+        const r = coincidencias[0]
+        const ficha =
+`📋 *${r[3] || r[1]}* - FICHA
+👤 Corto: ${r[1]}
+📍 Sucursal: ${r[2]||'-'}
+💼 Puesto: ${r[4]||'-'}
+📅 Ingreso: ${r[5]||'-'}
+
+📱 Tel: ${r[0]||'-'}
+🚨 Emergencia: ${r[6]||'-'}
+📞 Tel Emerg: ${r[7]||'-'}
+🪪 CURP: ${r[8]||'-'}
+🆔 NSS: ${r[9]||'-'}`
+        await sock.sendMessage(jid,{text:ficha})
+        return
+      }
+
       if(texto.toLowerCase().startsWith('asistencia hoy')){ let suc=texto.toLowerCase().replace('asistencia hoy','').trim(); if(!suc) suc='coyoacan'; await asistenciaHoy(suc,jid,sock); return }
       if(texto.toLowerCase().startsWith('resumen ')){ let txtLow=texto.toLowerCase(); let tipo='actual'; if(txtLow.includes('pasada')||txtLow.includes('pasado')) tipo='pasada'; let limpio=texto.slice(8).toLowerCase().trim().replace(/pasada|pasado|actual|esta semana|hoy/g,'').trim(); if(limpio.includes('bucareli')||limpio.includes('juarez')||limpio.includes('coyo')||limpio.includes('hotel')){ let suc='coyoacan'; if(limpio.includes('juarez')||limpio.includes('bucareli')) suc='juarez'; await reporteSucursal(suc,jid,sock,tipo); await generarExcelSemanaYEnviar(suc,jid,sock,tipo); return } if(!limpio){ await sock.sendMessage(jid,{text:'Escribe: resumen [nombre] pasada o actual'}); return } await resumenEmpleado(limpio,jid,sock,tipo); return }
       if(/^(reporte|checador)/i.test(texto)){ const txtLow=texto.toLowerCase(); const tipo=txtLow.includes('pasada')||txtLow.includes('pasado')?'pasada':txtLow.includes('actual')||txtLow.includes('esta')||txtLow.includes('hoy')?'actual':'pasada'; if(txtLow.includes('auto')||txtLow.includes('test')){ await enviarReportesAutomaticos(sock); return } let suc='coyoacan'; if(txtLow.includes('juarez')||txtLow.includes('bucareli')) suc='juarez'; else if(txtLow.includes('hotel')) suc='hotel'; else if(txtLow.includes('coyo')) suc='coyoacan'; await reporteSucursal(suc,jid,sock,tipo); await generarExcelSemanaYEnviar(suc,jid,sock,tipo); return }
+
       const esEntrada=/entr|ingres|lle?gue|aqui estoy|presente/i.test(texto); const esSalida=/salid|me voy|adios|bye/i.test(texto)
       if(!loc){ if(esEntrada) await sock.sendMessage(jid,{text:'Envía tu ubicación para entrada'},{quoted:m}); if(esSalida) await sock.sendMessage(jid,{text:'Envía tu ubicación para salida'},{quoted:m}); return }
       const lat=loc.degreesLatitude,lng=loc.degreesLongitude; let cercana=null,dMin=Infinity; for(const s of SUCURSALES){ const d=distM(lat,lng,s.lat,s.lng); if(d<dMin){dMin=d; cercana=s} }
-      const empRowsFull = await getRows('Empleados!A:H'); let emp=null; if(tel10.length>=10){ emp=empRowsFull.slice(1).find(r=>r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10) } if(!emp && rawLid.includes('@lid')){ emp=empRowsFull.slice(1).find(r=>r[7]===rawLid); if(emp){ tel10=(emp[0]||'').replace(/\D/g,'').slice(-10); tel=emp[0]||'' } }
+
+      // ===== EMPLEADOS A:K - K es LID =====
+      const empRowsFull = await getRows('Empleados!A:K')
+      const getLid = (row)=> (row.find(x=>String(x).includes('@lid'))||'').trim()
+      let emp=null; let empRowIndex=-1
+      if(tel10.length>=10){
+        const idx = empRowsFull.findIndex((r,i)=> i>0 && r[0] && r[0].replace(/\D/g,'').slice(-10)===tel10)
+        if(idx>-1){ emp=empRowsFull[idx]; empRowIndex=idx+1 }
+      }
+      if(!emp && rawLid.includes('@lid')){
+        const idx = empRowsFull.findIndex((r,i)=> i>0 && getLid(r)===rawLid)
+        if(idx>-1){ emp=empRowsFull[idx]; empRowIndex=idx+1; tel10=(emp[0]||'').replace(/\D/g,'').slice(-10); tel=emp[0]||'' }
+      }
+
+      // Auto-guardar LID en columna K si falta
+      if(emp && empRowIndex>-1 &&!getLid(emp) && rawLid.includes('@lid')){
+        try{
+          const sClient=await sheetsClient()
+          await sClient.spreadsheets.values.update({
+            spreadsheetId:SPREADSHEET_ID,
+            range:`Empleados!K${empRowIndex}`,
+            valueInputOption:'RAW',
+            requestBody:{values:[[rawLid]]}
+          })
+        }catch(e){ console.log('Error guardando LID en K', e.message) }
+      }
+
       const nombreFinal=emp?emp[1]:(m.pushName||tel10||'Desconocido'); const telFinal=emp?(emp[0]||'').replace(/\D/g,''):tel; const tel10Final=telFinal.slice(-10)||tel10
       const fLab=fechaLaboral(); const asisRows=await getRows('Asistencia!A:M'); const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10Final&&r[2]===fLab); const hoy=idx>-1?asisRows[idx]:null; const sClient=await sheetsClient(); const baseMap=await getHorarioBaseMap(); const baseInfo=baseMap[tel10Final]||baseMap[nombreFinal.toLowerCase()]||baseMap[nombreFinal.toLowerCase().split(' ')[0]]||null
       let estatus='A TIEMPO'; let horaProgObj=null
