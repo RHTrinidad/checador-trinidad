@@ -14,10 +14,10 @@ const ExcelJS = require('exceljs')
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID
 
-// ===== FIX PARA VARIOS GRUPOS DE REPORTES EN UNA SOLA VARIABLE DE RAILWAY =====
-const GRUPO_REPORTES_RAW = process.env.GRUPO_REPORTES_ID || "120363412984528459@g.us"
-const GRUPO_REPORTES_IDS = GRUPO_REPORTES_RAW.split(',').map(s => s.trim()).filter(Boolean)
-const GRUPO_REPORTES_ID = GRUPO_REPORTES_IDS[0] // compatibilidad
+// ===== CONFIG FINAL 5 VARIABLES =====
+const GRUPO_REPORTES_RAW = process.env.GRUPO_REPORTES_ID || "120363412984528459@g.us,120363430350253017@g.us"
+const GRUPO_REPORTES_IDS = GRUPO_REPORTES_RAW.split(/[, \n]+/).map(s => s.trim()).filter(s => s.includes('@g.us'))
+const GRUPO_REPORTES_ID = GRUPO_REPORTES_IDS[0]
 
 const GRUPO_COYOACAN_ID = process.env.GRUPO_COYOACAN_ID || "120363430474175735@g.us"
 const GRUPO_BUCARELI_ID = process.env.GRUPO_BUCARELI_ID || "120363410610062461@g.us"
@@ -216,11 +216,56 @@ async function generarExcelEmpleado(nombreBuscarRaw, jid, sock, tipo='actual'){ 
 async function resumenEmpleado(nombreBuscar, jidRespuesta, sock, tipo='actual'){ const sClient=await sheetsClient(); const [asisRes, baseMap]=await Promise.all([ sClient.spreadsheets.values.get({spreadsheetId: SPREADSHEET_ID, range:'Asistencia!A2:M'}), getHorarioBaseMap() ]); const filas=asisRes.data.values||[]; let buscar=nombreBuscar.toLowerCase().replace(/actual|pasada|pasado|esta semana|hoy/g,'').trim(); const { lunes, domingo, rangoTxt } = getRangoSemana(tipo); const info = baseMap[buscar] || Object.values(baseMap).find(v=> (v.nombreOriginal||'').toLowerCase().includes(buscar)) || { descansos:new Set(), horas:{} }; let diasSem=0,retSem=0,minSem=0,detalle=[],sin=[],horasMin=0,extraTotal=0, diasNom=['Dom','Lun','Mar','Mie','Jue','Vie','Sab']; for(const f of filas){ const n=(f[1]||'').toLowerCase(); if(!n.includes(buscar)) continue; const fe=parseFechaMX(f[2]); if(!fe) continue; fe.setHours(0,0,0,0); if(fe<lunes||fe>domingo) continue; if(f[3]){ diasSem++; const ret=(f[4]||'').match(/(\d+)\s*min/); if(ret){retSem++; minSem+=parseInt(ret[1])} if(!f[5]) sin.push(f[2]); const progDia=info.horas[fe.getDay()]; if(f[3]&&f[5]&&progDia){ const calc=calcularExtra(f[3],f[5],progDia.entrada,progDia.salida); let mt=calc.trabajadas==="8"?480:(()=>{const[hh,mm]=calc.trabajadas.split(':').map(Number);return hh*60+mm})(); horasMin+=mt; extraTotal+=calc.extraMin } detalle.push(`• ${f[2]}: Ent ${f[3]} | Sal ${f[5]||'SIN'} | Trab ${f[10]||''} | Extra ${f[11]||'0'} | ${f[12]||''}`) } } let esperados=0; for(let d=new Date(lunes); d<=domingo; d.setDate(d.getDate()+1)){ if(!info.descansos.has(d.getDay())) esperados++ } const faltas=Math.max(0,esperados-diasSem); const descTxt=[...info.descansos].map(d=>diasNom[d]).join(', ')||'ninguno'; const txt=`📊 *${buscar.toUpperCase()}* - Desc: ${descTxt}\n${rangoTxt}\n\n*SEMANA ${tipo.toUpperCase()}*\n- Trabajados: ${diasSem}/${esperados} - Faltas: ${faltas}\n- Retardos: ${retSem} (${minSem} min)\n- Sin salida: ${sin.length}\n- Horas Trab: ${Math.floor(horasMin/60)}:${String(horasMin%60).padStart(2,'0')}h\n- Horas Extra: ${Math.floor(extraTotal/60)}:${String(extraTotal%60).padStart(2,'0')}h\n\nDetalle:\n${detalle.join('\n')||'Sin registros'}`; await sock.sendMessage(jidRespuesta,{text:txt}); if(diasSem>0) await generarExcelEmpleado(buscar, jidRespuesta, sock, tipo) }
 async function reporteSucursal(filtroSucursal, jid, sock, tipo='pasada'){ const [asisRes, baseRows] = await Promise.all([ (await sheetsClient()).spreadsheets.values.get({spreadsheetId: SPREADSHEET_ID, range:'Asistencia!A2:M'}), getRows('Horario_Base!A2:K') ]); const filas=asisRes.data.values||[]; const {lunes,domingo,rangoTxt}=getRangoSemana(tipo); const filtro=filtroSucursal.toLowerCase(); const esCoyo=filtro.includes('coyo')||filtro.includes('hotel'); const esJuarez=filtro.includes('juarez')||filtro.includes('bucareli'); const baseMap = await getHorarioBaseMap(); let datos={}; for(const f of filas){ const fe=parseFechaMX(f[2]); if(!fe||fe<lunes||fe>domingo) continue; const suc=((f[6]||'')+' '+(f[8]||'')).toLowerCase(); let inc=false; if(esCoyo) inc=suc.includes('coyo')||suc.includes('hotel'); else if(esJuarez) inc=suc.includes('juarez')||suc.includes('bucareli'); else inc=suc.includes(filtro); if(!inc) continue; const n=f[1]||'Desconocido'; if(!datos[n]) datos[n]={dias:0,ret:0,min:0,sin:0,horasMin:0,extraMin:0, fechas:new Set(), tel: (f[0]||'').replace(/\D/g,'').slice(-10)}; if(!datos[n].fechas.has(f[2])){ datos[n].fechas.add(f[2]); datos[n].dias++ }; const m=(f[4]||'').match(/(\d+)\s*min/); if(m){datos[n].ret++; datos[n].min+=parseInt(m[1])} if(!f[5]) datos[n].sin++; if(f[3] && f[5]){ const feDia=parseFechaMX(f[2]); const diaNum=feDia?feDia.getDay():new Date().getDay(); const info=baseMap[datos[n].tel]||baseMap[n.toLowerCase()]||null; const prog=info?.horas?.[diaNum]||null; const calc=calcularExtra(f[3],f[5],prog?.entrada||null,prog?.salida||null); let mt=calc.trabajadas==="8"?480:(()=>{const[hh,mm]=calc.trabajadas.split(':').map(Number);return hh*60+mm})(); datos[n].horasMin+=mt; datos[n].extraMin+=calc.extraMin } } let txt=`📊 *REPORTE ${filtroSucursal.toUpperCase()}* - ${tipo}\n${rangoTxt}\n${esCoyo?'Incluye: Coyoacán + Servicio Hotel\n':''}\n`; if(!Object.keys(datos).length) txt+='Sin registros de asistencia\n'; else for(const n in datos){ const d=datos[n]; txt+=`*${n}*: ${d.dias} días | Ret ${d.ret} (${d.min}m) | Trab: ${Math.floor(d.horasMin/60)}:${String(d.horasMin%60).padStart(2,'0')}h | Extra: ${Math.floor(d.extraMin/60)}:${String(d.extraMin%60).padStart(2,'0')}h | Sin salida: ${d.sin}\n\n` } if(tipo==='actual'){ const ahoraMX = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})); const diaNum=ahoraMX.getDay(); const fLab=fechaLaboral(); const horaActual=minutos(horaMX()); let faltas=[]; for(const r of baseRows){ const nombre=r[1]||''; const sucBase=r[2]||''; const sucBaseLow=sucBase.toLowerCase(); let inc=false; if(esCoyo) inc=sucBaseLow.includes('coyo')||sucBaseLow.includes('hotel')||sucBaseLow.includes('trinidad'); else if(esJuarez) inc=sucBaseLow.includes('juarez')||sucBaseLow.includes('bucareli'); else inc=true; if(!inc) continue; const mapa={1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}; const v=(mapa[diaNum]||'').toString().trim(); const parsed=parseHorarioRango(v); if(!parsed) continue; if(parsed.entrada==='LIBRE'){ if(horaActual < 20*60) continue } const tel=(r[0]||'').replace(/\D/g,'').slice(-10); const yaCheco=filas.some(f=>f[0]?.replace(/\D/g,'').slice(-10)===tel && f[2]===fLab && f[3]); if(!yaCheco){ faltas.push(`• ${nombre} - [${sucBase}] Prog ${parsed.entrada}${parsed.salida?` - ${parsed.salida}`:''} - ❌ NO LLEGÓ`) } } if(faltas.length){ txt+=`\n❌ *FALTAS HOY ${fechaLaboral()} (${faltas.length}):*\n`+faltas.join('\n') } else { txt+=`\n✅ *Sin faltas hasta ahora*` } } await sock.sendMessage(jid,{text:txt}) }
 async function generarExcelSemanaYEnviar(filtroSucursal, jid, sock, tipo='pasada'){ const sClient=await sheetsClient(); const baseMap=await getHorarioBaseMap(); const asisRes=await sClient.spreadsheets.values.get({spreadsheetId: SPREADSHEET_ID, range:'Asistencia!A2:M'}); const filas=asisRes.data.values||[]; const {lunes,domingo,rangoTxt}=getRangoSemana(tipo); const esCoyo=filtroSucursal.toLowerCase().includes('coyo')||filtroSucursal.toLowerCase().includes('hotel'); const esJuarez=filtroSucursal.toLowerCase().includes('juarez')||filtroSucursal.toLowerCase().includes('bucareli'); const filtradas=filas.filter(f=>{ const fe=parseFechaMX(f[2]); if(!fe||fe<lunes||fe>domingo) return false; const suc=((f[6]||'')+' '+(f[8]||'')).toLowerCase(); if(esCoyo) return suc.includes('coyo')||suc.includes('hotel'); if(esJuarez) return suc.includes('juarez')||suc.includes('bucareli'); return suc.includes(filtroSucursal.toLowerCase()) }); let datos={}; for(const f of filtradas){ const n=f[1]||'Desconocido'; const tel=(f[0]||'').replace(/\D/g,'').slice(-10); if(!datos[n]) datos[n]={dias:0,ret:0,min:0,sin:0,horasMin:0,extraMin:0, tel}; const fe=parseFechaMX(f[2]); if(fe){ const prog=baseMap[tel]?.horas?.[fe.getDay()]; if(f[3]&&f[5]){ const calc=calcularExtra(f[3],f[5],prog?.entrada,prog?.salida); let mt=calc.trabajadas==="8"?480:(()=>{const[hh,mm]=calc.trabajadas.split(':').map(Number);return hh*60+mm})(); datos[n].horasMin+=mt; datos[n].extraMin+=calc.extraMin } } datos[n].dias++; const m=(f[4]||'').match(/(\d+)\s*min/); if(m){datos[n].ret++; datos[n].min+=parseInt(m[1])} if(!f[5]) datos[n].sin++ } const header=["Tel","Nombre","Fecha","Entrada","Estatus Entrada","Salida","Suc Entrada","Dist Entr","Suc Salida","Dist Sal","Horas Trabajadas","Horas Extra","Jornada"]; const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet('Resumen'); ws.addRow([`REPORTE ${filtroSucursal.toUpperCase()} - ${tipo}`]).font={bold:true,size:14}; ws.addRow([rangoTxt]); if(esCoyo) ws.addRow(['Incluye: Coyoacán + Servicio Hotel']); ws.addRow([]); ws.addRow(['Nombre','Días','Retardos','Min','Sin salida','Horas Trab','Horas Extra']).font={bold:true}; for(const [n,d] of Object.entries(datos)){ ws.addRow([n, `${d.dias} días`, `Ret ${d.ret} (${d.min}m)`, d.sin, `${Math.floor(d.horasMin/60)}:${String(d.horasMin%60).padStart(2,'0')}h`, `${Math.floor(d.extraMin/60)}:${String(d.extraMin%60).padStart(2,'0')}h`]) } ws.columns.forEach(c=>c.width=22); const ws2=wb.addWorksheet('Detalle'); ws2.addRow(header).font={bold:true}; filtradas.forEach(f=>{ ws2.addRow(f) }); ws2.columns.forEach(c=>c.width=18); const fileName=`Reporte_${filtroSucursal}_${tipo}_${lunes.toISOString().split('T')[0]}.xlsx`; const fp=path.join(os.tmpdir(),fileName); await wb.xlsx.writeFile(fp); await sock.sendMessage(jid,{document:fs.readFileSync(fp),mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',fileName}); fs.unlinkSync(fp) }
-async function enviarReportesAutomaticos(sock){ const jid=GRUPO_REPORTES_ID; try{ await reporteSucursal('coyoacan',jid,sock,'pasada'); await generarExcelSemanaYEnviar('coyoacan',jid,sock,'pasada'); await new Promise(r=>setTimeout(r,2000)); await reporteSucursal('juarez',jid,sock,'pasada'); await generarExcelSemanaYEnviar('juarez',jid,sock,'pasada'); await sock.sendMessage(jid,{text:`✅ Reportes automáticos - ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}`}) }catch(e){ console.error(e) } }
+
+async function enviarReportesAutomaticos(sock){
+  for(const jid of GRUPO_REPORTES_IDS){
+    try{
+      await reporteSucursal('coyoacan',jid,sock,'pasada')
+      await generarExcelSemanaYEnviar('coyoacan',jid,sock,'pasada')
+      await new Promise(r=>setTimeout(r,2000))
+      await reporteSucursal('juarez',jid,sock,'pasada')
+      await generarExcelSemanaYEnviar('juarez',jid,sock,'pasada')
+      await sock.sendMessage(jid,{text:`✅ Reportes automáticos - ${new Date().toLocaleString('es-MX',{timeZone:'America/Mexico_City'})}`})
+    }catch(e){ console.error('Reporte auto err', jid, e.message) }
+  }
+}
+
 let avisosCache = new Set()
-async function verificarFaltasYRetardos(sock){ const ahoraMX = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})); const fLab=fechaLaboral(); const horaActualMin=minutos(horaMX()); if(horaActualMin < 30) avisosCache.clear(); try{ const [baseRows, asisRows, avisosRows] = await Promise.all([ getRows('Horario_Base!A2:K'), getRows('Asistencia!A2:M'), getRows('Avisos!A2:C') ]); for(const a of avisosRows){ if(a[1]===fLab){ avisosCache.add((a[0]||'').replace(/\D/g,'').slice(-10)+'_'+fLab) } } for(const r of baseRows){ const tel=(r[0]||'').replace(/\D/g,'').slice(-10); const nombre=r[1]||tel; const sucProg=r[2]||''; if(!tel) continue; const clave=tel+'_'+fLab; if(avisosCache.has(clave)) continue; const diaNum=ahoraMX.getDay(); const mapa={1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}; const v=(mapa[diaNum]||'').toString().trim(); const parsed=parseHorarioRango(v); if(!parsed) continue; if(parsed.entrada==='LIBRE') continue; const horaProg=parsed.entrada; const dif=horaActualMin-minutos(horaProg); if(dif >= 20 && dif <= 29){ const yaCheco=asisRows.some(a=>a[0]?.replace(/\D/g,'').slice(-10)===tel && a[2]===fLab && a[3]); if(!yaCheco){ avisosCache.add(clave); try{ const sClient=await sheetsClient(); await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Avisos!A:C',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel,fLab,horaMX()]]}}) }catch(e){} await sock.sendMessage(GRUPO_REPORTES_ID, {text: `⚠ *NO HA LLEGADO* - ${nombre}\n📍 Unidad: ${sucProg}\nProg: ${horaProg}${parsed.salida?` - ${horaProg.salida}`:''} - Ahora: ${horaMX()} (${dif} min tarde)\n${fLab}`}) } } } }catch(e){ console.log('verificarFaltas err', e.message) } }
+async function verificarFaltasYRetardos(sock){
+  const ahoraMX = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}))
+  const fLab=fechaLaboral(); const horaActualMin=minutos(horaMX())
+  if(horaActualMin < 30) avisosCache.clear()
+  try{
+    const [baseRows, asisRows, avisosRows] = await Promise.all([ getRows('Horario_Base!A2:K'), getRows('Asistencia!A2:M'), getRows('Avisos!A2:C') ])
+    for(const a of avisosRows){ if(a[1]===fLab){ avisosCache.add((a[0]||'').replace(/\D/g,'').slice(-10)+'_'+fLab) } }
+    for(const r of baseRows){
+      const tel=(r[0]||'').replace(/\D/g,'').slice(-10); const nombre=r[1]||tel; const sucProg=r[2]||''
+      if(!tel) continue; const clave=tel+'_'+fLab; if(avisosCache.has(clave)) continue
+      const diaNum=ahoraMX.getDay(); const mapa={1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
+      const v=(mapa[diaNum]||'').toString().trim(); const parsed=parseHorarioRango(v)
+      if(!parsed) continue; if(parsed.entrada==='LIBRE') continue
+      const horaProg=parsed.entrada; const dif=horaActualMin-minutos(horaProg)
+      if(dif >= 20 && dif <= 29){
+        const yaCheco=asisRows.some(a=>a[0]?.replace(/\D/g,'').slice(-10)===tel && a[2]===fLab && a[3])
+        if(!yaCheco){
+          avisosCache.add(clave)
+          try{ const sClient=await sheetsClient(); await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Avisos!A:C',valueInputOption:'USER_ENTERED',requestBody:{values:[[tel,fLab,horaMX()]]}}) }catch(e){}
+          const esCoyo = sucProg.toLowerCase().includes('coyo') || sucProg.toLowerCase().includes('hotel') || sucProg.toLowerCase().includes('trinidad')
+          const grupoGerente = esCoyo? GRUPO_COYOACAN_ID : GRUPO_BUCARELI_ID
+          const msg = `⚠ *NO HA LLEGADO* - ${nombre}\n📍 Unidad: ${sucProg}\nProg: ${horaProg}${parsed.salida?` - ${parsed.salida}`:''} - Ahora: ${horaMX()} (${dif} min tarde)\n${fLab}`
+          // A gerentes de su unidad
+          try{ await sock.sendMessage(grupoGerente, {text: msg}) }catch{}
+          // A todos los reportes
+          for(const idRep of GRUPO_REPORTES_IDS){ try{ await sock.sendMessage(idRep, {text: msg}) }catch{} }
+        }
+      }
+    }
+  }catch(e){ console.log('verificarFaltas err', e.message) }
+}
+
 const app=express(); let lastQR=null; let globalSock=null
 app.get('/',(req,res)=>res.send('Bot OK - /qr')); app.get('/qr',async(req,res)=>{ if(!lastQR) return res.send('No QR'); const dataUrl=await QRCode.toDataURL(lastQR); res.send(`<img src="${dataUrl}" style="width:350px">`) }); app.listen(process.env.PORT||3000)
+
 async function start(){
   const { state, saveCreds } = await useMultiFileAuthState('/app/auth')
   const { version } = await fetchLatestBaileysVersion()
@@ -240,7 +285,7 @@ async function start(){
       const texto=m.message?.conversation||m.message?.extendedTextMessage?.text||m.message?.imageMessage?.caption||'';
       const loc=m.message?.locationMessage || m.message?.liveLocationMessage || m.message?.viewOnceMessage?.message?.locationMessage || m.message?.viewOnceMessageV2?.message?.locationMessage
 
-      if(texto.trim().toLowerCase()==='id'){ await sock.sendMessage(jid,{text:`ID: ${jid}`}); return }
+      if(texto.trim().toLowerCase()==='id'){ await sock.sendMessage(jid,{text:`ID: ${jid}\nTipo: ${getTipoGrupo(jid) || 'OTRO'}\nFiltro: ${await getFiltroPorGrupo(jid,sock) || 'LIBRE'}`}); return }
 
       const tipoGrupo = getTipoGrupo(jid)
       if(!tipoGrupo) return
@@ -248,7 +293,12 @@ async function start(){
       const filtroGrupo = await getFiltroPorGrupo(jid, sock)
 
       if(tipoGrupo === 'CHECADORES'){
-        if(!loc) return
+        if(!loc) {
+          if(texto && PAQUETES.REPORTES_PARA_GERENTES.test(texto)){
+            await sock.sendMessage(jid,{text:`⚠️ Este grupo es solo para checar entradas y salidas.\nSolicita informes en el grupo de gerentes.`})
+          }
+          return
+        }
       }
 
       if(tipoGrupo === 'GERENTES'){
@@ -257,9 +307,9 @@ async function start(){
       }
 
       if(PAQUETES.REPORTES_PARA_GERENTES.test(texto)){
-        if(texto.toLowerCase().startsWith('asistencia hoy')){ let suc=texto.toLowerCase().replace('asistencia hoy','').trim(); if(!suc) suc=filtroGrupo||'coyoacan'; await asistenciaHoy(suc,jid,sock); return }
-        if(texto.toLowerCase().startsWith('resumen ')){ let txtLow=texto.toLowerCase(); let tipo='actual'; if(txtLow.includes('pasada')||txtLow.includes('pasado')) tipo='pasada'; let limpio=texto.slice(8).toLowerCase().trim().replace(/pasada|pasado|actual|esta semana|hoy/g,'').trim(); if(limpio.includes('bucareli')||limpio.includes('juarez')||limpio.includes('coyo')||limpio.includes('hotel')){ let suc='coyoacan'; if(limpio.includes('juarez')||limpio.includes('bucareli')) suc='juarez'; await reporteSucursal(suc,jid,sock,tipo); await generarExcelSemanaYEnviar(suc,jid,sock,tipo); return } if(!limpio){ await sock.sendMessage(jid,{text:'Escribe: resumen [nombre] pasada o actual'}); return } await resumenEmpleado(limpio,jid,sock,tipo); return }
-        if(/^(reporte|checador|reporte x unidad|reportes x unidad)/i.test(texto)){ const txtLow=texto.toLowerCase(); const tipo=txtLow.includes('pasada')||txtLow.includes('pasado')?'pasada':txtLow.includes('actual')||txtLow.includes('esta')||txtLow.includes('hoy')?'actual':'pasada'; if(txtLow.includes('auto')||txtLow.includes('test')){ await enviarReportesAutomaticos(sock); return } let suc='coyoacan'; if(txtLow.includes('juarez')||txtLow.includes('bucareli')) suc='juarez'; else if(txtLow.includes('hotel')) suc='hotel'; else if(txtLow.includes('coyo')) suc='coyoacan'; if(txtLow.includes('x unidad') || txtLow.includes('por unidad')){ await reporteSucursal('coyoacan',jid,sock,tipo); await generarExcelSemanaYEnviar('coyoacan',jid,sock,tipo); await reporteSucursal('juarez',jid,sock,tipo); await generarExcelSemanaYEnviar('juarez',jid,sock,tipo); return } await reporteSucursal(suc,jid,sock,tipo); await generarExcelSemanaYEnviar(suc,jid,sock,tipo); return }
+        if(texto.toLowerCase().startsWith('asistencia hoy')){ let suc=texto.toLowerCase().replace('asistencia hoy','').trim(); if(!suc) suc=filtroGrupo||'coyoacan'; if(filtroGrupo &&!sucursalCoincideConFiltro(suc, filtroGrupo)){ await sock.sendMessage(jid,{text:`⚠️ No hay registros de *${suc.toUpperCase()}* en esta unidad.\nEste grupo es solo de *${filtroGrupo.toUpperCase()}*.`}); return } await asistenciaHoy(suc,jid,sock); return }
+        if(texto.toLowerCase().startsWith('resumen ')){ let txtLow=texto.toLowerCase(); let tipo='actual'; if(txtLow.includes('pasada')||txtLow.includes('pasado')) tipo='pasada'; let limpio=texto.slice(8).toLowerCase().trim().replace(/pasada|pasado|actual|esta semana|hoy/g,'').trim(); if(limpio.includes('bucareli')||limpio.includes('juarez')||limpio.includes('coyo')||limpio.includes('hotel')){ let suc='coyoacan'; if(limpio.includes('juarez')||limpio.includes('bucareli')) suc='juarez'; if(filtroGrupo &&!sucursalCoincideConFiltro(suc, filtroGrupo)){ await sock.sendMessage(jid,{text:`⚠️ No hay registros de *${suc.toUpperCase()}* en esta unidad.`}); return } await reporteSucursal(suc,jid,sock,tipo); await generarExcelSemanaYEnviar(suc,jid,sock,tipo); return } if(!limpio){ await sock.sendMessage(jid,{text:'Escribe: resumen [nombre] pasada o actual'}); return } await resumenEmpleado(limpio,jid,sock,tipo); return }
+        if(/^(reporte|checador|reporte x unidad|reportes x unidad)/i.test(texto)){ const txtLow=texto.toLowerCase(); const tipo=txtLow.includes('pasada')||txtLow.includes('pasado')?'pasada':txtLow.includes('actual')||txtLow.includes('esta')||txtLow.includes('hoy')?'actual':'pasada'; if(txtLow.includes('auto')||txtLow.includes('test')){ await enviarReportesAutomaticos(sock); return } let suc='coyoacan'; if(txtLow.includes('juarez')||txtLow.includes('bucareli')) suc='juarez'; else if(txtLow.includes('hotel')) suc='hotel'; else if(txtLow.includes('coyo')) suc='coyoacan'; if(txtLow.includes('x unidad') || txtLow.includes('por unidad')){ if(!filtroGrupo){ await reporteSucursal('coyoacan',jid,sock,tipo); await generarExcelSemanaYEnviar('coyoacan',jid,sock,tipo); await reporteSucursal('juarez',jid,sock,tipo); await generarExcelSemanaYEnviar('juarez',jid,sock,tipo); } else { await reporteSucursal(filtroGrupo,jid,sock,tipo); await generarExcelSemanaYEnviar(filtroGrupo,jid,sock,tipo); } return } if(filtroGrupo &&!sucursalCoincideConFiltro(suc, filtroGrupo)){ await sock.sendMessage(jid,{text:`⚠️ No hay registros de *${suc.toUpperCase()}* en esta unidad.`}); return } await reporteSucursal(suc,jid,sock,tipo); await generarExcelSemanaYEnviar(suc,jid,sock,tipo); return }
         if(/^(numero|número|num|tel|telefono|teléfono|info|ficha|datos|dato)\s*(de)?/i.test(texto)){
           let buscar = texto.toLowerCase().replace(/^(numero|número|num|tel|telefono|teléfono|info|ficha|datos|dato)\s*(de)?\s*/i,'').trim()
           if(!buscar){ await sock.sendMessage(jid,{text:'Escribe: info fer / datos alejandro'}); return }
@@ -274,7 +324,7 @@ async function start(){
           }
           candidatos.sort((a,b)=>b.s-a.s)
           if(!candidatos.length){
-            if(filtroGrupo) await sock.sendMessage(jid,{text:`⛔ No encontré a "${buscar}" en ${filtroGrupo.toUpperCase()}.`})
+            if(filtroGrupo) await sock.sendMessage(jid,{text:`⛔ No encontré a "${buscar}" en ${filtroGrupo.toUpperCase()}.\nNo hay registros en esa unidad.`})
             else await sock.sendMessage(jid,{text:`No encontré a "${buscar}"`})
             return
           }
