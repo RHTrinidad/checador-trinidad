@@ -11,7 +11,7 @@ const require = createRequire(import.meta.url)
 const { google } = require('googleapis')
 const ExcelJS = require('exceljs')
 import OpenAI from 'openai'
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 30000, maxRetries: 2 })
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: 60000, maxRetries: 2 })
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID
 const SPREADSHEET_COMPRAS_ID = process.env.SPREADSHEET_COMPRAS_ID || "1eidbKAX5QAaDvDj_oe5BBQis3TA0WUohVZE0MH4cug4"
 const SHEET_RESUMEN = 'RESUMEN'
@@ -43,7 +43,7 @@ function parseFechaMX(s){ if(!s) return null; if(/^\d{4}-\d{2}-\d{2}$/.test(s)) 
 async function getRows(range, sid){ const s=await sheetsClient(); const r=await s.spreadsheets.values.get({spreadsheetId: sid || SPREADSHEET_ID, range}); return r.data.values||[] }
 function getRangoSemana(tipo){ const hoyMX = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})); const diaSem = hoyMX.getDay(); const lunesEstaSem = new Date(hoyMX); lunesEstaSem.setDate(hoyMX.getDate() - (diaSem===0?6:diaSem-1)); let lunes, domingo; if(tipo==='pasada'){ lunes=new Date(lunesEstaSem); lunes.setDate(lunes.getDate()-7); domingo=new Date(lunes); domingo.setDate(domingo.getDate()+6); } else { lunes=lunesEstaSem; domingo=hoyMX; } lunes.setHours(0,0,0,0); domingo.setHours(23,59,59,999); return { lunes, domingo, rangoTxt: `${lunes.toLocaleDateString('es-MX')} al ${domingo.toLocaleDateString('es-MX')} (${tipo})` } }
 function normaliza(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim() }
-function normalizarProveedor(n){ let u=(n||"").toUpperCase().trim(); if(u.includes("VICTOR HUGO")||u.includes("POBLANO BRAVO")||u.includes("MAURICIO POBLANO")||u.includes("TRINIDAD")) return null; if(u.includes("GASTRO")) return "GASTROSOPHIA"; if(u.includes("TRES B")||u.includes("3B")) return "TIENDAS TRES B"; if(u.includes("FLORENTINA")) return "QUESOS FLORENTINA"; if(u.includes("CASA DEL PVC")||u.includes("CASA PVC")) return "LA CASA DEL PVC"; return u.length<3?"PROVEEDOR OCASIONAL":u }
+function normalizarProveedor(n){ let u=(n||"").toUpperCase().trim(); if(u.includes("VICTOR HUGO")||u.includes("POBLANO BRAVO")||u.includes("MAURICIO POBLANO")||u.includes("TRINIDAD")) return null; if(u.includes("GASTRO")) return "GASTROSOPHIA"; if(u.includes("TRES B")||u.includes("3B")) return "TIENDAS TRES B"; if(u.includes("FLORENTINA")) return "QUESOS FLORENTINA"; if(u.includes("CASA DEL PVC")||u.includes("CASA PVC")) return "LA CASA DEL PVC"; if(u.includes("COYOACAN")||u.includes("COYOACÁN")||u.includes("ERICKA")) return "LACTEOS COYOACAN"; return u.length<3?"PROVEEDOR OCASIONAL":u }
 function scoreEmpleado(corto, completo, buscarNorm){ const c = normaliza(corto), d = normaliza(completo); if(c === buscarNorm) return 100; if(c.startsWith(buscarNorm)) return 90; if(c.includes(buscarNorm) || d.includes(buscarNorm)) return 10; return -1 }
 async function getHorarioBaseMap(){ try{ const rows = await getRows('Horario_Base!A2:K'); const map = {}; for(const f of rows){ const tel = (f[0]||'').replace(/\D/g,'').slice(-10); const nombre = (f[1]||'').toLowerCase().trim(); if(!nombre) continue; const dias = { 1:f[3], 2:f[4], 3:f[5], 4:f[6], 5:f[7], 6:f[8], 0:f[9] }; const descansos = new Set(); const horas = {}; for(const [numDia, valor] of Object.entries(dias)){ const v = (valor||'').toString().trim(); if(!v){ descansos.add(parseInt(numDia)); continue } const parsed = parseHorarioRango(v); if(!parsed) descansos.add(parseInt(numDia)); else horas[numDia]=parsed } const obj = { descansos, horas, nombreOriginal: f[1], tel, sucursal: f[2]||'' }; if(tel) map[tel]=obj; map[nombre]=obj; const primer=nombre.split(' ')[0]; if(primer &&!map[primer]) map[primer]=obj } return map }catch(e){ return {} } }
 let grupoFiltroCache = new Map()
@@ -53,13 +53,100 @@ async function leerTicketConIA(bufferImagen){
   const base64 = bufferImagen.toString('base64');
   const res = await openai.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [{ role: "user", content: [{ type: "text", text: `Si es comprobante pago -> {"tipo":"comprobante_pago"} Si es compra lee proveedor y monto. Ej LA CASA DEL PVC 528, QUESOS FLORENTINA 3300. Responde {"tipo":"compra","items":[{"proveedor":"...","monto":123,"concepto":"..."}]} SOLO JSON.` }, { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}` } }] }],
-    max_tokens: 500
+    messages: [{
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `
+Eres extractor de compras para restaurante Ma. Trinidad Bucareli/Coyoacan.
+Analiza la imagen. Puede ser NOTA DE REMISION / FACTURA / TICKET con lista de productos, o COMPROBANTE DE TRANSFERENCIA BANCARIA.
+
+REGLAS OBLIGATORIAS:
+1. Si es NOTA con tabla (ej QUESOS FLORENTINA NOTA 0687):
+- folio = FACTURA NO. (0687)
+- fecha = convierte "25 09 26" a "2026-09-25". Si no hay año, usa 2026.
+- proveedor = encabezado (QUESOS FLORENTINA)
+- sucursal = Si dice "MA TRINIDAD" o "BUCARELI" => BUCARELI. Si dice COYOACAN => COYOACAN. Default BUCARELI.
+- total = campo TOTAL ($3,300 => 3300)
+- forma_pago = EFECTIVO si dice "Se paga en efectivo", si no, EFECTIVO por default.
+- items = EXTRAE CADA RENGLON DE LA TABLA. NO RESUMAS NUNCA.
+  "1 Pza Queso Panela 160 - 160" => {"cantidad":"1 Pza","descripcion":"Queso Panela","precio_unitario":160,"costo_final":160}
+  ".300 Queso Parmesano 370 - 111" => {"cantidad":"0.300 kg","descripcion":"Queso Parmesano","precio_unitario":370,"costo_final":111}
+- Verifica que SUM(costo_final) == total.
+
+2. Si es COMPROBANTE DE TRANSFERENCIA (ej Banorte, BBVA, transferencia a ERICKA SOLIS $2295 concepto LACTEOS COYOACAN):
+- NO LO OMITAS. Es una COMPRA.
+- folio = ultimos 6 digitos de Clave rastreo o fecha-hora.
+- fecha = fecha del comprobante.
+- proveedor = beneficiario o concepto (LACTEOS COYOACAN)
+- total = monto
+- forma_pago = TRANSFERENCIA
+- items = [{"cantidad":"1","descripcion":"concepto del pago","precio_unitario":total,"costo_final":total}]
+
+Devuelve SOLO JSON:
+{
+  "tipo":"compra",
+  "folio":"0687",
+  "fecha":"2026-09-25",
+  "proveedor":"QUESOS FLORENTINA",
+  "sucursal":"BUCARELI",
+  "total":3300,
+  "forma_pago":"EFECTIVO",
+  "items":[{"cantidad":"1 Pza","descripcion":"Queso Panela","precio_unitario":160,"costo_final":160}]
+}
+`
+        },
+        { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}` } }
+      ]
+    }],
+    max_tokens: 2000,
+    response_format: { type: "json_object" }
   });
-  let txt = res.choices[0].message.content.replace(/```json|```/g,'').replace(/```/g,'').trim();
+  let txt = res.choices[0].message.content.replace(/```json|```/g,'').trim();
   return JSON.parse(txt);
 }
-async function registrarCompra(datos){ const sClient = await sheetsClient(); const proveedorFinal = normalizarProveedor(datos.proveedor) || "PROVEEDOR OCASIONAL"; await sClient.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_COMPRAS_ID, range:`${SHEET_RESUMEN}!A:I`, valueInputOption:'USER_ENTERED', requestBody:{ values:[[ datos.semana, datos.fecha, datos.sucursal, proveedorFinal, datos.folio, datos.monto, datos.concepto, "", "" ]] } }); try{ await sClient.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_COMPRAS_ID, range:`${SHEET_INSUMOS}!A:G`, valueInputOption:'USER_ENTERED', requestBody:{ values:[[ datos.folio, datos.concepto, "1", datos.monto, datos.monto, datos.sucursal, datos.fecha ]] } }) }catch(e){} return { msg:`✅ $${datos.monto} - ${proveedorFinal} guardado.` } }
+async function registrarCompra(datos){
+  const sClient = await sheetsClient();
+  const proveedorFinal = normalizarProveedor(datos.proveedor) || "PROVEEDOR OCASIONAL";
+  const fechaFinal = datos.fecha || fechaLaboral();
+  const folioFinal = (datos.folio || `AC-${Date.now().toString().slice(-6)}`).toString();
+  const sucursalFinal = (datos.sucursal || "BUCARELI").toUpperCase();
+  const totalFinal = Number(datos.total) || 0;
+  await sClient.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_COMPRAS_ID,
+    range:`${SHEET_RESUMEN}!A:I`,
+    valueInputOption:'USER_ENTERED',
+    requestBody:{ values:[[ datos.semana || getSemanaActual(), fechaFinal, sucursalFinal, proveedorFinal, folioFinal, totalFinal, datos.proveedor, "", datos.forma_pago || "EFECTIVO" ]] }
+  });
+  if(datos.items && datos.items.length > 0){
+    const rowsInsumos = datos.items.map(it => [
+      folioFinal,
+      it.descripcion || datos.proveedor,
+      it.cantidad? it.cantidad.toString() : "1",
+      it.precio_unitario!= null? it.precio_unitario : it.costo_final,
+      it.costo_final!= null? it.costo_final : totalFinal,
+      sucursalFinal,
+      fechaFinal
+    ]);
+    await sClient.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_COMPRAS_ID,
+      range:`${SHEET_INSUMOS}!A:G`,
+      valueInputOption:'USER_ENTERED',
+      requestBody:{ values: rowsInsumos }
+    });
+    const suma = datos.items.reduce((a,b)=> a + (Number(b.costo_final)||0), 0);
+    return { msg:`✅ $${totalFinal} - ${proveedorFinal} (${folioFinal}) guardado.\n📦 ${datos.items.length} productos desglosados en INSUMOS. Suma: $${suma}` }
+  } else {
+    await sClient.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_COMPRAS_ID,
+      range:`${SHEET_INSUMOS}!A:G`,
+      valueInputOption:'USER_ENTERED',
+      requestBody:{ values:[[ folioFinal, datos.proveedor, "1", totalFinal, totalFinal, sucursalFinal, fechaFinal ]] }
+    });
+    return { msg:`✅ $${totalFinal} - ${proveedorFinal} guardado.` }
+  }
+}
 async function generarExcelCompras(filtro, jid, sock){ const rows = await getRows(`${SHEET_RESUMEN}!A2:I`, SPREADSHEET_COMPRAS_ID); let filtradas = rows.filter(r=>{ if(filtro.sucursal &&!(r[2]||'').toUpperCase().includes(filtro.sucursal.toUpperCase())) return false; if(filtro.fecha && r[1]!==filtro.fecha) return false; return true }); const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Compras'); ws.addRow(['Semana','Fecha','Sucursal','Proveedor','#Comprobante','Importe','Concepto','Area','FormaPago']).font={bold:true}; filtradas.forEach(r=>ws.addRow(r)); const total = filtradas.reduce((a,r)=> a + (parseFloat((r[5]||'0').toString().replace(/,/g,''))||0), 0); ws.addRow([]); ws.addRow(['TOTAL','','','','',total]); ws.columns.forEach(c=>c.width=18); const fileName = `Compras_${filtro.sucursal||'TODAS'}_${fechaLaboral()}.xlsx`; const fp = path.join(os.tmpdir(), fileName); await wb.xlsx.writeFile(fp); await sock.sendMessage(jid,{document:fs.readFileSync(fp),mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',fileName, caption:`📊 Compras ${filtro.sucursal||''} - ${filtradas.length} regs - Total $${total}`}); fs.unlinkSync(fp) }
 function parseFiltroCompras(texto){ const low = normaliza(texto); let suc = null; if(low.includes('bucareli')) suc='BUCARELI'; else if(low.includes('coyo')) suc='COYOACAN'; else if(low.includes('juarez')) suc='JUAREZ'; let fecha = null; if(low.includes('hoy')) fecha = fechaLaboral(); return { sucursal:suc, fecha } }
 async function asistenciaHoy(filtroSucursal, jid, sock){ const sClient = await sheetsClient(); const baseRows = await getRows('Horario_Base!A2:K'); const asisRows = await sClient.spreadsheets.values.get({spreadsheetId: SPREADSHEET_ID, range:'Asistencia!A2:M'}).then(r=>r.data.values||[]); const fLab = fechaLaboral(); const ahoraMin = minutos(horaMX()); const ahoraMXDate = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})); const diaNum = ahoraMXDate.getDay(); const filtro = filtroSucursal.toLowerCase(); const esCoyo = filtro.includes('coyo') || filtro.includes('hotel'); const esJuarez = filtro.includes('juarez')||filtro.includes('bucareli'); let llego=[], retardo=[], falta=[], futuro=[]; for(const r of baseRows){ const sucBaseLower = (r[2]||'').toLowerCase(); const sucBaseOriginal = r[2]||''; let inc=false; if(esCoyo) inc = sucBaseLower.includes('coyo')||sucBaseLower.includes('hotel')||sucBaseLower.includes('trinidad'); else if(esJuarez) inc = sucBaseLower.includes('juarez')||sucBaseLower.includes('bucareli'); else inc = sucBaseLower.includes(filtro); if(!inc) continue; const nombre = r[1]||''; const tel = (r[0]||'').replace(/\D/g,'').slice(-10); const mapa = {1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}; const v = (mapa[diaNum]||'').toString().trim(); const parsed = parseHorarioRango(v); if(!parsed) continue; const esLibre = parsed.entrada === 'LIBRE'; const horaProg = esLibre? 'LIBRE' : parsed.entrada; const registro = asisRows.find(a => a[0]?.replace(/\D/g,'').slice(-10)===tel && a[2]===fLab); if(registro && registro[3]){ const entrada = registro[3]; const sucEnt = registro[6]||''; const dif = esLibre? 0 : minutos(entrada) - minutos(horaProg); if(esLibre){ llego.push(`• ${nombre} - Entró ${entrada} en ${sucEnt} ✅`) } else if(dif > 15){ retardo.push(`• ${nombre} - [${sucBaseOriginal}] Prog ${horaProg} - Entró ${entrada} - ⏰ ${dif}m tarde - ${sucEnt}`) } else llego.push(`• ${nombre} - [${sucBaseOriginal}] Prog ${horaProg} - Entró ${entrada} ✅ - ${sucEnt}`) } else { if(esLibre){ if(ahoraMin >= 20*60) falta.push(`• ${nombre} - [${sucBaseOriginal}] - ❌ sin llegar`); continue } const dif = ahoraMin - minutos(horaProg); if(dif < 0){ futuro.push(`• ${nombre} - [${sucBaseOriginal}] - Prog ${horaProg}`) } else falta.push(`• ${nombre} - [${sucBaseOriginal}] - Prog ${horaProg} - ❌ ${dif}m sin llegar`) } } let txt = `📍 *ASISTENCIA HOY ${fLab} - ${filtroSucursal.toUpperCase()}* ${horaMX()}\n\n✅ *A TIEMPO (${llego.length}):*\n${llego.join('\n')||'-'}\n\n⏰ *RETARDOS (${retardo.length}):*\n${retardo.join('\n')||'-'}\n\n❌ *NO HAN LLEGADO (${falta.length}):*\n${falta.join('\n')||'Todos llegaron'}\n\n⏳ *PRÓXIMOS (${futuro.length}):*\n${futuro.join('\n')||'-'}`; await sock.sendMessage(jid,{text:txt}) }
@@ -94,16 +181,14 @@ async function start(){
           try{
             const buffer = await downloadMediaMessage(m, 'buffer', {}, { logger: P({level:'fatal'}), reuploadRequest: sock.updateMediaMessage })
             let datosIA = await leerTicketConIA(buffer)
-            if(datosIA.tipo === 'comprobante_pago'){ await sock.sendMessage(jid,{text:`✅ Comprobante omitido - no se suma a costos.`}); return }
-            if(datosIA.tipo === 'compra' && datosIA.items){
-              for(let it of datosIA.items){
-                let datosFinal = { folio: it.folio || `AC-${Date.now().toString().slice(-6)}`, concepto: it.concepto || "OTROS", proveedor: it.proveedor || "PROVEEDOR OCASIONAL", monto: (it.monto||"0").toString().replace(/,/g,''), fecha: fechaLaboral(), sucursal: "BUCARELI", semana: getSemanaActual() }
-                const res = await registrarCompra(datosFinal)
-                await sock.sendMessage(jid,{text: res.msg})
-              }
+            console.log("IA DESGLOSE:", JSON.stringify(datosIA, null, 2))
+            if(datosIA.tipo === 'compra'){
+              let datosFinal = { folio: datosIA.folio, proveedor: datosIA.proveedor, total: datosIA.total, fecha: datosIA.fecha || fechaLaboral(), sucursal: datosIA.sucursal || "BUCARELI", semana: getSemanaActual(), forma_pago: datosIA.forma_pago || "EFECTIVO", items: datosIA.items }
+              const res = await registrarCompra(datosFinal)
+              await sock.sendMessage(jid,{text: res.msg})
               return
             }
-          }catch(e){ console.error(e); await sock.sendMessage(jid,{text:`❌ Error IA: ${e.message}`}) ; return }
+          }catch(e){ console.error("Error IA", e); await sock.sendMessage(jid,{text:`❌ Error IA: ${e.message}`}) ; return }
         }
       }
       if(!tipoGrupo) return
