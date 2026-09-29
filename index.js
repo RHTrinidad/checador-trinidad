@@ -53,49 +53,37 @@ function sucursalCoincideConFiltro(sucEmpleado, filtro){ if(!filtro) return true
 function normaliza(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim() }
 function scoreEmpleado(corto, completo, buscarNorm){ const c = normaliza(corto); const d = normaliza(completo); if(c === buscarNorm) return 100; if(c.startsWith(buscarNorm)) return 90; if(c.includes(buscarNorm) || d.includes(buscarNorm)) return 10; return -1 }
 
-// ===== COMPRAS ADAPTADO A TU SHEET REAL =====
 function detectarSucursalCompra(texto){ const t = normaliza(texto); if(t.includes('bucareli')) return 'BUCARELI'; if(t.includes('coyoacan') || t.includes('coyo')) return 'COYOACAN'; if(t.includes('juarez')) return 'JUAREZ'; return 'BUCARELI' }
 function parseCompra(texto){
   const raw = texto || ""; const norm = normaliza(raw)
   let folio = null; const mFolio = raw.match(/(?:AC|NOTA|FOLIO|FAC|#)[\s\-:#]*([A-Z0-9\-]{2,25})/i); if(mFolio) folio = mFolio[0].toUpperCase().replace(/\s+/g,'').replace(/:/g,'')
   let concepto = null; for(const c of CONCEPTOS){ if(norm.includes(normaliza(c))) { concepto = c; break } }
-  let forma = ""; if(norm.includes('efectivo')) forma='EFECTIVO'; else if(norm.includes('transfer')) forma='TRANSFERENCIA'; else if(norm.includes('tarjeta')) forma='TARJETA'; else forma='EFECTIVO'
   let monto = ""; const mMonto = raw.match(/\$?\s*([\d,]+\.?\d*)/); if(mMonto) monto = mMonto[1]
-  return { folio: folio || `AC-${Date.now().toString().slice(-6)}`, concepto: concepto || "HIELO", proveedor:"", forma, monto: monto||"0", fecha: fechaLaboral(), sucursal: detectarSucursalCompra(raw), raw, semana: getSemanaActual() }
+  return { folio: folio || `AC-${Date.now().toString().slice(-6)}`, concepto: concepto || "HIELO", proveedor:"", monto: monto||"0", fecha: fechaLaboral(), sucursal: detectarSucursalCompra(raw), raw, semana: getSemanaActual() }
 }
 async function registrarCompra(datos, jid, nombrePersona){
   const sClient = await sheetsClient()
-  const rows = await getRows(`${SHEET_RESUMEN}!A2:I`, SPREADSHEET_COMPRAS_ID)
-  const idxExistente = rows.findIndex(r => r[4]===datos.folio && r[1]===datos.fecha &&!datos.folio.includes('AC-')===false)
-  if(idxExistente>-1 &&!datos.folio.startsWith('AC-')){
-    const filaNum = idxExistente + 2
-    const montoExist = parseFloat((rows[idxExistente][5]||'0').toString().replace(/,/g,'')) || 0
-    const montoNuevo = parseFloat(datos.monto.replace(/,/g,'')) || 0
-    await sClient.spreadsheets.values.update({ spreadsheetId: SPREADSHEET_COMPRAS_ID, range: `${SHEET_RESUMEN}!F${filaNum}`, valueInputOption:'USER_ENTERED', requestBody:{ values:[[(montoExist+montoNuevo).toString()]] } })
-    return { ok:true, msg:`🔄 Folio ${datos.folio} agrupado en RESUMEN - Total $${montoExist+montoNuevo} (${datos.sucursal})` }
-  } else {
+  // A Semana, B Fecha, C Sucursal, D Proveedor, E #Comprob, F Importe, G Concepto, H Area VACIO, I forma pago VACIO
+  await sClient.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_COMPRAS_ID,
+    range:`${SHEET_RESUMEN}!A:I`,
+    valueInputOption:'USER_ENTERED',
+    requestBody:{ values:[[ datos.semana, datos.fecha, datos.sucursal, datos.proveedor||"", datos.folio, datos.monto, datos.concepto, "", "" ]] }
+  })
+  try{
     await sClient.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_COMPRAS_ID,
-      range:`${SHEET_RESUMEN}!A:I`,
+      range:`${SHEET_INSUMOS}!A:G`,
       valueInputOption:'USER_ENTERED',
-      requestBody:{ values:[[ datos.semana, datos.fecha, datos.sucursal, datos.proveedor, datos.folio, datos.monto, datos.concepto, "COMPRAS", datos.forma ]] }
+      requestBody:{ values:[[ datos.folio, datos.concepto, "1", datos.monto, datos.monto, datos.sucursal, datos.fecha ]] }
     })
-    // También registra en INSUMOS si es producto identificable
-    try{
-      await sClient.spreadsheets.values.append({
-        spreadsheetId: SPREADSHEET_COMPRAS_ID,
-        range:`${SHEET_INSUMOS}!A:G`,
-        valueInputOption:'USER_ENTERED',
-        requestBody:{ values:[[ datos.folio, datos.concepto, "1", datos.monto, datos.monto, datos.sucursal, datos.fecha ]] }
-      })
-    }catch(e){}
-    return { ok:true, msg:`✅ Compra ${datos.folio} $${datos.monto} - ${datos.concepto} - ${datos.sucursal} guardada en RESUMEN + INSUMOS` }
-  }
+  }catch(e){}
+  return { ok:true, msg:`✅ ${datos.folio} $${datos.monto} - ${datos.concepto} - ${datos.sucursal} guardado en RESUMEN (Área y forma pago vacíos)` }
 }
 async function generarExcelCompras(filtro, jid, sock){
   const rows = await getRows(`${SHEET_RESUMEN}!A2:I`, SPREADSHEET_COMPRAS_ID)
   let filtradas = rows.filter(r=>{ if(filtro.sucursal &&!(r[2]||'').toUpperCase().includes(filtro.sucursal.toUpperCase())) return false; if(filtro.fecha && r[1]!==filtro.fecha) return false; return true })
-  const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Compras'); ws.addRow(['Semana','Fecha','Sucursal','Proveedor','#Comprobante','Importe','Concepto','Area','FormaPago']).font={bold:true}; filtradas.forEach(r=>ws.addRow(r)); const total = filtradas.reduce((a,r)=> a + (parseFloat((r[5]||'0').toString().replace(/,/g,''))||0), 0); ws.addRow([]); ws.addRow(['TOTAL','','','','',total]); ws.columns.forEach(c=>c.width=18); const fileName = `Compras_${filtro.sucursal||'TODAS'}_${fechaLaboral()}.xlsx`; const fp = path.join(os.tmpdir(), fileName); await wb.xlsx.writeFile(fp); await sock.sendMessage(jid,{document:fs.readFileSync(fp),mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',fileName, caption:`📊 Compras ${filtro.sucursal||''} - ${filtradas.length} regs - Total $${total} - pestaña RESUMEN`}); fs.unlinkSync(fp)
+  const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('Compras'); ws.addRow(['Semana','Fecha','Sucursal','Proveedor','#Comprobante','Importe','Concepto','Area','FormaPago']).font={bold:true}; filtradas.forEach(r=>ws.addRow(r)); const total = filtradas.reduce((a,r)=> a + (parseFloat((r[5]||'0').toString().replace(/,/g,''))||0), 0); ws.addRow([]); ws.addRow(['TOTAL','','','','',total]); ws.columns.forEach(c=>c.width=18); const fileName = `Compras_${filtro.sucursal||'TODAS'}_${fechaLaboral()}.xlsx`; const fp = path.join(os.tmpdir(), fileName); await wb.xlsx.writeFile(fp); await sock.sendMessage(jid,{document:fs.readFileSync(fp),mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',fileName, caption:`📊 Compras ${filtro.sucursal||''} - ${filtradas.length} regs - Total $${total} - RESUMEN`}); fs.unlinkSync(fp)
 }
 function parseFiltroCompras(texto){ const low = normaliza(texto); let suc = null; if(low.includes('bucareli')) suc='BUCARELI'; else if(low.includes('coyo')) suc='COYOACAN'; else if(low.includes('juarez')) suc='JUAREZ'; let fecha = null; if(low.includes('hoy')) fecha = fechaLaboral(); return { sucursal:suc, fecha } }
 
@@ -115,7 +103,7 @@ async function start(){
   sock.ev.on('connection.update', async ({connection, lastDisconnect, qr}) => {
     if (qr) { lastQR = qr; qrcodeTerminal.generate(qr,{small:false}) }
     if (connection === 'close') { const code=lastDisconnect?.error?.output?.statusCode; if(code!==DisconnectReason.loggedOut) setTimeout(()=>start(),5000) }
-    if (connection === 'open') { console.log('✅ CONECTADO - RESUMEN ADAPTADO A Compras trinidad'); }
+    if (connection === 'open') { console.log('✅ CONECTADO - RESUMEN SIN AREA NI FORMA PAGO'); }
   })
   sock.ev.on('messages.upsert', async ({messages})=>{
     try{
@@ -127,22 +115,20 @@ async function start(){
       const esImagen =!!(m.message?.imageMessage || m.message?.documentMessage?.mimetype?.includes('image') || m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage)
       if(texto.trim().toLowerCase()==='id'){ await sock.sendMessage(jid,{text:`ID: ${jid}\nTipo: ${getTipoGrupo(jid)}`}); return }
       const tipoGrupo = getTipoGrupo(jid); const filtroGrupo = await getFiltroPorGrupo(jid, sock)
-
       if(tipoGrupo==='REPORTES'){
         if(/^compras/i.test(texto)){ const f = parseFiltroCompras(texto); await generarExcelCompras(f, jid, sock); return }
         if(esImagen){
-          console.log('📸 FOTO COMPRAS DETECTADA:', texto||'(sin caption)')
+          console.log('📸 FOTO COMPRAS:', texto||'(sin caption)')
           const datos = parseCompra(texto || "BUCARELI $360 HIELO")
           if(!datos.monto || datos.monto==="0") datos.monto="360"
           const res = await registrarCompra(datos, jid, m.pushName||tel10)
-          await sock.sendMessage(jid,{text:res.msg + "\n📝 " + (texto||"sin caption")})
+          await sock.sendMessage(jid,{text:res.msg})
           return
         }
       }
       if(!tipoGrupo) return
       if(tipoGrupo === 'CHECADORES'){ if(!loc){ if(texto && PAQUETES.REPORTES_PARA_GERENTES.test(texto)){ await sock.sendMessage(jid,{text:`⚠️ Este grupo es solo para checar entradas y salidas.`}) } return } }
       if(tipoGrupo === 'GERENTES'){ if(loc) return; if(texto &&!PAQUETES.REPORTES_PARA_GERENTES.test(texto)) return }
-
       if(PAQUETES.REPORTES_PARA_GERENTES.test(texto)){
         if(texto.toLowerCase().startsWith('asistencia hoy')){ let suc=texto.toLowerCase().replace('asistencia hoy','').trim(); if(!suc) suc=filtroGrupo||'coyoacan'; if(filtroGrupo &&!sucursalCoincideConFiltro(suc, filtroGrupo)){ await sock.sendMessage(jid,{text:`⚠️ No hay registros de *${suc.toUpperCase()}* en esta unidad.`}); return } await asistenciaHoy(suc,jid,sock); return }
         if(texto.toLowerCase().startsWith('resumen ')){ let txtLow=texto.toLowerCase(); let tipo='actual'; if(txtLow.includes('pasada')||txtLow.includes('pasado')) tipo='pasada'; let limpio=texto.slice(8).toLowerCase().trim().replace(/pasada|pasado|actual|esta semana|hoy/g,'').trim(); if(limpio.includes('bucareli')||limpio.includes('juarez')||limpio.includes('coyo')||limpio.includes('hotel')){ let suc='coyoacan'; if(limpio.includes('juarez')||limpio.includes('bucareli')) suc='juarez'; if(filtroGrupo &&!sucursalCoincideConFiltro(suc, filtroGrupo)){ await sock.sendMessage(jid,{text:`⚠️ No hay registros de *${suc.toUpperCase()}* en esta unidad.`}); return } await reporteSucursal(suc,jid,sock,tipo); await generarExcelSemanaYEnviar(suc,jid,sock,tipo); return } if(!limpio){ await sock.sendMessage(jid,{text:'Escribe: resumen [nombre] pasada o actual'}); return } await resumenEmpleado(limpio,jid,sock,tipo); return }
