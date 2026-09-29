@@ -13,7 +13,7 @@
     "googleapis": "^144.0.0",
     "node-cron": "^3.0.3",
     "exceljs": "^4.4.0",
-    "tesseract.js": "^5.1.0",
-    "pino": "^8.17.2"
+    "pino": "^8.17.2",
+    "openai": "^4.52.7"
   }
 }
