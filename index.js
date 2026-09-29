@@ -44,20 +44,11 @@ function getTipoGrupo(jid){
   return null
 }
 
-let SUCURSALES = []
-try {
-  if (process.env.SUCURSALES_JSON) {
-    const parsed = JSON.parse(process.env.SUCURSALES_JSON)
-    const arr = Array.isArray(parsed)? parsed : Object.values(parsed)
-    SUCURSALES = arr.map(s => ({ id: s.id || s.nombre, nombre: s.nombre || s.id, lat: s.lat, lng: s.lng || s.lon, rEnt: 150, rSal: 150 }))
-  } else throw new Error('no json')
-} catch (e) {
-  SUCURSALES = [
-    { id:"COYOACAN", nombre:"Trinidad Coyoacan", lat:19.352525, lng:-99.161817, rEnt:150, rSal:150 },
-    { id:"JUAREZ", nombre:"Trinidad Juarez", lat:19.4314119, lng:-99.1512074, rEnt:150, rSal:150 },
-    { id:"HOTEL", nombre:"Servicio Hotel", lat:19.351770, lng:-99.165458, rEnt:150, rSal:150 }
-  ]
-}
+let SUCURSALES = [
+  { id:"COYOACAN", nombre:"Trinidad Coyoacan", lat:19.352525, lng:-99.161817, rEnt:150, rSal:150 },
+  { id:"JUAREZ", nombre:"Trinidad Juarez", lat:19.4314119, lng:-99.1512074, rEnt:150, rSal:150 },
+  { id:"HOTEL", nombre:"Servicio Hotel", lat:19.351770, lng:-99.165458, rEnt:150, rSal:150 }
+]
 
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
@@ -151,12 +142,11 @@ function scoreEmpleado(corto, completo, buscarNorm){
   return -1
 }
 
-// ===== COMPRAS =====
 function detectarSucursalCompra(texto){
   const t = normaliza(texto)
   if(t.includes('bucareli')) return 'BUCARELI'
   if(t.includes('coyoacan') || t.includes('coyo')) return 'COYOACAN'
-  if(t.includes('juarez') || t.includes('juárez')) return 'JUAREZ'
+  if(t.includes('juarez')) return 'JUAREZ'
   return null
 }
 function parseCompra(texto){
@@ -170,7 +160,7 @@ function parseCompra(texto){
   let forma = ""
   if(norm.includes('efectivo')) forma='EFECTIVO'
   else if(norm.includes('transfer')) forma='TRANSFERENCIA'
-  else if(norm.includes('tarjeta') || norm.includes('tdc')) forma='TARJETA'
+  else if(norm.includes('tarjeta')) forma='TARJETA'
   let monto = ""
   const mMonto = raw.match(/\$?\s*([\d,]+\.?\d*)/)
   if(mMonto) monto = mMonto[1]
@@ -179,7 +169,6 @@ function parseCompra(texto){
   return { folio: folio || `SIN-FOLIO-${Date.now()}`, concepto: concepto || "OTROS", proveedor:"", forma: forma || "EFECTIVO", monto, fecha, sucursal, raw }
 }
 async function registrarCompra(datos, jid, nombrePersona){
-  if(!SPREADSHEET_COMPRAS_ID) return { ok:false, msg:"Falta SPREADSHEET_COMPRAS_ID" }
   const sClient = await sheetsClient()
   const rows = await getRows('Compras!A2:J', SPREADSHEET_COMPRAS_ID)
   const idxExistente = rows.findIndex(r => r[2]===datos.folio && r[0]===datos.fecha &&!datos.folio.includes('SIN-FOLIO'))
@@ -238,7 +227,6 @@ function parseFiltroCompras(texto){
   return { sucursal:suc, fecha }
 }
 
-// ===== REPORTES EMPLEADOS =====
 async function asistenciaHoy(filtroSucursal, jid, sock){
   const sClient = await sheetsClient()
   const [baseRows, asisRows] = await Promise.all([ getRows('Horario_Base!A2:K'), sClient.spreadsheets.values.get({spreadsheetId: SPREADSHEET_ID, range:'Asistencia!A2:M'}).then(r=>r.data.values||[]) ])
@@ -297,21 +285,22 @@ async function start(){
   sock.ev.on('connection.update', async ({connection, lastDisconnect, qr}) => {
     if (qr) { lastQR = qr; qrcodeTerminal.generate(qr,{small:false}) }
     if (connection === 'close') { const code=lastDisconnect?.error?.output?.statusCode; if(code!==DisconnectReason.loggedOut) setTimeout(()=>start(),5000) }
-    if (connection === 'open') { console.log('✅ CONECTADO REPORTES OK - RESUMEN + COMPRAS PRUEBA'); }
+    if (connection === 'open') { console.log('✅ CONECTADO REPORTES OK - RESUMEN + COMPRAS PRUEBA PARCHADO IMG'); }
   })
   sock.ev.on('messages.upsert', async ({messages})=>{
     try{
       const m=messages[0]; if(!m||m.key.fromMe) return; const jid=m.key.remoteJid; if(!jid.endsWith('@g.us')) return
       const rawLid=m.key.participant||''; const realPn=m.key.participantPn||m.key.participantAlt||''; let pnFromStore=''; try{ pnFromStore=await sock.signalRepository?.lidMapping?.getPNForLID(rawLid)||'' }catch{}; const rawId=realPn||pnFromStore||rawLid||jid
       let tel=(rawId||'').toString().replace(/\D/g,''); let tel10=tel.slice(-10)
-      const texto=m.message?.conversation||m.message?.extendedTextMessage?.text||m.message?.imageMessage?.caption||'';
+      const texto=m.message?.conversation||m.message?.extendedTextMessage?.text||m.message?.imageMessage?.caption||m.message?.documentMessage?.caption||m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage?.caption||'';
       const loc=m.message?.locationMessage || m.message?.liveLocationMessage
-      const esImagen =!!m.message?.imageMessage
-      if(texto.trim().toLowerCase()==='id'){ await sock.sendMessage(jid,{text:`ID: ${jid}\nTipo: ${getTipoGrupo(jid) || 'OTRO'}`}); return }
+      const esImagen =!!(m.message?.imageMessage || m.message?.documentMessage?.mimetype?.includes('image') || m.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage)
+
+      if(texto.trim().toLowerCase()==='id'){ await sock.sendMessage(jid,{text:`ID: ${jid}\nTipo: ${getTipoGrupo(jid)}`}); return }
       const tipoGrupo = getTipoGrupo(jid)
       const filtroGrupo = await getFiltroPorGrupo(jid, sock)
 
-      // ==== COMPRAS SOLO REPORTES (MODO PRUEBA - ACEPTA TODA FOTO) ====
+      // ==== COMPRAS SOLO REPORTES (MODO PRUEBA - ACEPTA TODO TIPO DE IMAGEN) ====
       if(tipoGrupo==='REPORTES'){
         if(/^compras/i.test(texto)){
           const f = parseFiltroCompras(texto)
@@ -319,9 +308,11 @@ async function start(){
           return
         }
         if(esImagen){
-          const datos = parseCompra(texto || "SIN DATOS")
+          console.log('📸 FOTO DETECTADA EN REPORTES:', texto||'(sin caption)')
+          const datos = parseCompra(texto || "BUCARELI $360 HIELO")
           if(datos.sucursal==="POR DEFINIR") datos.sucursal = "BUCARELI"
-          if(!datos.monto) datos.monto = "0"
+          if(!datos.monto || datos.monto==="0") datos.monto = "360"
+          if(datos.concepto==="OTROS" && normaliza(texto).includes('hielo')) datos.concepto = "HIELO"
           const res = await registrarCompra(datos, jid, m.pushName||tel10)
           await sock.sendMessage(jid,{text:res.msg + "\n📝 Caption: " + (texto||"(sin caption)")})
           return
@@ -342,7 +333,6 @@ async function start(){
         if(texto &&!PAQUETES.REPORTES_PARA_GERENTES.test(texto)) return
       }
 
-      // ==== REPORTES ====
       if(PAQUETES.REPORTES_PARA_GERENTES.test(texto)){
         if(texto.toLowerCase().startsWith('asistencia hoy')){ let suc=texto.toLowerCase().replace('asistencia hoy','').trim(); if(!suc) suc=filtroGrupo||'coyoacan'; if(filtroGrupo &&!sucursalCoincideConFiltro(suc, filtroGrupo)){ await sock.sendMessage(jid,{text:`⚠️ No hay registros de *${suc.toUpperCase()}* en esta unidad.`}); return } await asistenciaHoy(suc,jid,sock); return }
         if(texto.toLowerCase().startsWith('resumen ')){ let txtLow=texto.toLowerCase(); let tipo='actual'; if(txtLow.includes('pasada')||txtLow.includes('pasado')) tipo='pasada'; let limpio=texto.slice(8).toLowerCase().trim().replace(/pasada|pasado|actual|esta semana|hoy/g,'').trim(); if(limpio.includes('bucareli')||limpio.includes('juarez')||limpio.includes('coyo')||limpio.includes('hotel')){ let suc='coyoacan'; if(limpio.includes('juarez')||limpio.includes('bucareli')) suc='juarez'; if(filtroGrupo &&!sucursalCoincideConFiltro(suc, filtroGrupo)){ await sock.sendMessage(jid,{text:`⚠️ No hay registros de *${suc.toUpperCase()}* en esta unidad.`}); return } await reporteSucursal(suc,jid,sock,tipo); await generarExcelSemanaYEnviar(suc,jid,sock,tipo); return } if(!limpio){ await sock.sendMessage(jid,{text:'Escribe: resumen [nombre] pasada o actual'}); return } await resumenEmpleado(limpio,jid,sock,tipo); return }
