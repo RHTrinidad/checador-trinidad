@@ -28,7 +28,7 @@ GRUPO_REPORTES_IDS = GRUPO_REPORTES_IDS.filter(id =>!TODOS_GERENTES_CHECADOR.inc
 const GRUPOS = { REPORTES: GRUPO_REPORTES_IDS, CHECADORES: [GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID], GERENTES: [GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, GRUPO_JUAREZ_ID] }
 const PAQUETES = { REPORTES_PARA_GERENTES: /^(numero|número|num|tel|telefono|teléfono|info|ficha|datos|dato|asistencia hoy|resumen|reporte|checador|reporte x unidad|rfc|ine|curp|compras)/i }
 function getTipoGrupo(jid){ if(GRUPOS.REPORTES.includes(jid)) return 'REPORTES'; if(GRUPOS.CHECADORES.includes(jid)) return 'CHECADORES'; if(GRUPOS.GERENTES.includes(jid)) return 'GERENTES'; return null }
-let SUCURSALES = [{ id:"COYOACAN", nombre:"Trinidad Coyoacan", lat:19.352525, lng:-99.161817, rEnt:150, rSal:150 },{ id:"JUAREZ", nombre:"Trinidad Juarez", lat:19.4314119, lng:-99.1512074, rEnt:150, rSal:150 },{ id:"HOTEL", nombre:"Servicio Hotel", lat:19.351770, lng:-99.165458, rEnt:150, rSal:150 }]
+let SUCURSALES = [{ id:"COYOACAN", nombre:"Trinidad Coyoacan", lat:19.352525, lng:-99.161817, rEnt:150, rSal:150 },{ id:"JUAREZ", nombre:"Trinidad Juarez", lat:19.4314119, lng:-99.1512074, rEnt:150, rSal:150 },{ id:"BUCARELI", nombre:"Trinidad Bucareli", lat:19.4314119, lng:-99.1512074, rEnt:150, rSal:150 },{ id:"HOTEL", nombre:"Servicio Hotel", lat:19.351770, lng:-99.165458, rEnt:150, rSal:150 }]
 const auth = new google.auth.GoogleAuth({ credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON), scopes: ['https://www.googleapis.com/auth/spreadsheets'] })
 async function sheetsClient(){ const c=await auth.getClient(); return google.sheets({version:'v4',auth:c}) }
 function distM(a,b,c,d){ const R=6371000, toRad=x=>x*Math.PI/180; const dLa=toRad(c-a), dLo=toRad(d-b); const q=Math.sin(dLa/2)**2+Math.cos(toRad(a))*Math.cos(toRad(c))*Math.sin(dLo/2)**2; return R*2*Math.atan2(Math.sqrt(q),Math.sqrt(1-q)) }
@@ -56,47 +56,7 @@ async function leerTicketConIA(bufferImagen){
     messages: [{
       role: "user",
       content: [
-        {
-          type: "text",
-          text: `
-Eres extractor de compras para restaurante Ma. Trinidad Bucareli/Coyoacan.
-Analiza la imagen. Puede ser NOTA DE REMISION / FACTURA / TICKET con lista de productos, o COMPROBANTE DE TRANSFERENCIA BANCARIA.
-
-REGLAS OBLIGATORIAS:
-1. Si es NOTA con tabla (ej QUESOS FLORENTINA NOTA 0687):
-- folio = FACTURA NO. (0687)
-- fecha = convierte "25 09 26" a "2026-09-25". Si no hay año, usa 2026.
-- proveedor = encabezado (QUESOS FLORENTINA)
-- sucursal = Si dice "MA TRINIDAD" o "BUCARELI" => BUCARELI. Si dice COYOACAN => COYOACAN. Default BUCARELI.
-- total = campo TOTAL ($3,300 => 3300)
-- forma_pago = EFECTIVO si dice "Se paga en efectivo", si no, EFECTIVO por default.
-- items = EXTRAE CADA RENGLON DE LA TABLA. NO RESUMAS NUNCA.
-  "1 Pza Queso Panela 160 - 160" => {"cantidad":"1 Pza","descripcion":"Queso Panela","precio_unitario":160,"costo_final":160}
-  ".300 Queso Parmesano 370 - 111" => {"cantidad":"0.300 kg","descripcion":"Queso Parmesano","precio_unitario":370,"costo_final":111}
-- Verifica que SUM(costo_final) == total.
-
-2. Si es COMPROBANTE DE TRANSFERENCIA (ej Banorte, BBVA, transferencia a ERICKA SOLIS $2295 concepto LACTEOS COYOACAN):
-- NO LO OMITAS. Es una COMPRA.
-- folio = ultimos 6 digitos de Clave rastreo o fecha-hora.
-- fecha = fecha del comprobante.
-- proveedor = beneficiario o concepto (LACTEOS COYOACAN)
-- total = monto
-- forma_pago = TRANSFERENCIA
-- items = [{"cantidad":"1","descripcion":"concepto del pago","precio_unitario":total,"costo_final":total}]
-
-Devuelve SOLO JSON:
-{
-  "tipo":"compra",
-  "folio":"0687",
-  "fecha":"2026-09-25",
-  "proveedor":"QUESOS FLORENTINA",
-  "sucursal":"BUCARELI",
-  "total":3300,
-  "forma_pago":"EFECTIVO",
-  "items":[{"cantidad":"1 Pza","descripcion":"Queso Panela","precio_unitario":160,"costo_final":160}]
-}
-`
-        },
+        { type: "text", text: `Eres extractor de compras para restaurante Ma. Trinidad Bucareli/Coyoacan. Analiza la imagen. Puede ser NOTA DE REMISION / FACTURA / TICKET con lista de productos, o COMPROBANTE DE TRANSFERENCIA BANCARIA. REGLAS OBLIGATORIAS: 1. Si es NOTA con tabla (ej QUESOS FLORENTINA NOTA 0687): folio = FACTURA NO. (0687), fecha = convierte "25 09 26" a "2026-09-25", proveedor = encabezado, sucursal = Si dice MA TRINIDAD o BUCARELI => BUCARELI. Si dice COYOACAN => COYOACAN. Default BUCARELI, total = campo TOTAL, forma_pago = EFECTIVO, items = EXTRAE CADA RENGLON. 2. Si es COMPROBANTE DE TRANSFERENCIA: folio = ultimos 6 digitos de Clave rastreo, fecha = fecha comprobante, proveedor = beneficiario, total = monto, forma_pago = TRANSFERENCIA, items = 1 item con concepto. Devuelve SOLO JSON` },
         { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64}` } }
       ]
     }],
@@ -113,37 +73,14 @@ async function registrarCompra(datos){
   const folioFinal = (datos.folio || `AC-${Date.now().toString().slice(-6)}`).toString();
   const sucursalFinal = (datos.sucursal || "BUCARELI").toUpperCase();
   const totalFinal = Number(datos.total) || 0;
-  await sClient.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_COMPRAS_ID,
-    range:`${SHEET_RESUMEN}!A:I`,
-    valueInputOption:'USER_ENTERED',
-    requestBody:{ values:[[ datos.semana || getSemanaActual(), fechaFinal, sucursalFinal, proveedorFinal, folioFinal, totalFinal, datos.proveedor, "", datos.forma_pago || "EFECTIVO" ]] }
-  });
+  await sClient.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_COMPRAS_ID, range:`${SHEET_RESUMEN}!A:I`, valueInputOption:'USER_ENTERED', requestBody:{ values:[[ datos.semana || getSemanaActual(), fechaFinal, sucursalFinal, proveedorFinal, folioFinal, totalFinal, datos.proveedor, "", datos.forma_pago || "EFECTIVO" ]] } });
   if(datos.items && datos.items.length > 0){
-    const rowsInsumos = datos.items.map(it => [
-      folioFinal,
-      it.descripcion || datos.proveedor,
-      it.cantidad? it.cantidad.toString() : "1",
-      it.precio_unitario!= null? it.precio_unitario : it.costo_final,
-      it.costo_final!= null? it.costo_final : totalFinal,
-      sucursalFinal,
-      fechaFinal
-    ]);
-    await sClient.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_COMPRAS_ID,
-      range:`${SHEET_INSUMOS}!A:G`,
-      valueInputOption:'USER_ENTERED',
-      requestBody:{ values: rowsInsumos }
-    });
+    const rowsInsumos = datos.items.map(it => [ folioFinal, it.descripcion || datos.proveedor, it.cantidad? it.cantidad.toString() : "1", it.precio_unitario!= null? it.precio_unitario : it.costo_final, it.costo_final!= null? it.costo_final : totalFinal, sucursalFinal, fechaFinal ]);
+    await sClient.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_COMPRAS_ID, range:`${SHEET_INSUMOS}!A:G`, valueInputOption:'USER_ENTERED', requestBody:{ values: rowsInsumos } });
     const suma = datos.items.reduce((a,b)=> a + (Number(b.costo_final)||0), 0);
     return { msg:`✅ $${totalFinal} - ${proveedorFinal} (${folioFinal}) guardado.\n📦 ${datos.items.length} productos desglosados en INSUMOS. Suma: $${suma}` }
   } else {
-    await sClient.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_COMPRAS_ID,
-      range:`${SHEET_INSUMOS}!A:G`,
-      valueInputOption:'USER_ENTERED',
-      requestBody:{ values:[[ folioFinal, datos.proveedor, "1", totalFinal, totalFinal, sucursalFinal, fechaFinal ]] }
-    });
+    await sClient.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_COMPRAS_ID, range:`${SHEET_INSUMOS}!A:G`, valueInputOption:'USER_ENTERED', requestBody:{ values:[[ folioFinal, datos.proveedor, "1", totalFinal, totalFinal, sucursalFinal, fechaFinal ]] } });
     return { msg:`✅ $${totalFinal} - ${proveedorFinal} guardado.` }
   }
 }
@@ -205,7 +142,45 @@ async function start(){
       const lat=loc.degreesLatitude,lng=loc.degreesLongitude; let cercana=null,dMin=Infinity; for(const s of SUCURSALES){ const d=distM(lat,lng,s.lat,s.lng); if(d<dMin){dMin=d; cercana=s} }
       const empRowsFull = await getRows('Empleados!A:K'); const getLid = (row)=> (row.find(x=>String(x).includes('@lid'))||'').trim(); let emp=null; if(tel10.length>=10){ const idx = empRowsFull.findIndex((r,i)=> i>0 && r[0] && r[0].replace(/\D/g,'').slice(-10)===tel10); if(idx>-1){ emp=empRowsFull[idx] } } if(!emp && rawLid.includes('@lid')){ const idx = empRowsFull.findIndex((r,i)=> i>0 && getLid(r)===rawLid); if(idx>-1){ emp=empRowsFull[idx]; tel10=(emp[0]||'').replace(/\D/g,'').slice(-10) } }
       const nombreCompleto = emp? (emp[3] || emp[1]) : (m.pushName||tel10||'Desconocido'); const telFinal=emp?(emp[0]||'').replace(/\D/g,''):tel; const tel10Final=telFinal.slice(-10)||tel10; const fLab=fechaLaboral(); const asisRows=await getRows('Asistencia!A:M'); const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10Final&&r[2]===fLab); const hoy=idx>-1?asisRows[idx]:null; const sClient=await sheetsClient(); const baseMap=await getHorarioBaseMap(); const baseInfo=baseMap[tel10Final]||baseMap[normaliza(nombreCompleto).split(' ')[0]]||null; let estatus='A TIEMPO'; let horaProgObj=null; if(baseInfo){ const fecha=new Date(fLab+'T12:00:00'); const diaNum=fecha.getDay(); if(baseInfo.descansos.has(diaNum)){ estatus='DESCANSO' } else if(baseInfo.horas[diaNum]){ horaProgObj=baseInfo.horas[diaNum]; if(horaProgObj.entrada!=='LIBRE'){ const hp=horaProgObj.entrada; const dif=minutos(horaMX())-minutos(hp); if(dif>15) estatus=`RETARDO ${dif}min (Prog ${hp})`; else estatus=`A TIEMPO Prog ${hp}` } } }
-      if(!hoy||!hoy[3]){ if(dMin>cercana.rEnt){ await sock.sendMessage(jid,{text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}`},{quoted:m}); return } const h=horaMX(); const jornadaTxt = horaProgObj? `${horaProgObj.entrada}${horaProgObj.salida?` - ${horaProgObj.salida}`:''}` : "8h"; const row = [tel10Final,nombreCompleto,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',calcularHorasTrabajadas(h,""),"0",jornadaTxt]; if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:M',valueInputOption:'USER_ENTERED',requestBody:{values:[row]}}); else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!A${idx+1}:M${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[row]}}); await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreCompleto} en ${cercana.nombre}`}) }else{ if(hoy[5]){ await sock.sendMessage(jid,{text:`Salida ya registrada`}); return } if(dMin>cercana.rSal){ await sock.sendMessage(jid,{text:`No puedes checar salida a ${Math.round(dMin)}m`},{quoted:m}); return } const h=horaMX(); const jornadaTxt = hoy[12]||"8h"; const { trabajadas, extra }=calcularExtra(hoy[3],h,horaProgObj?.entrada||null,horaProgObj?.salida||null); await sClient.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:`Asistencia!F${idx+1}:M${idx+1}`, valueInputOption:'USER_ENTERED', requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),trabajadas,extra,jornadaTxt]]} }); await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto}`}) }
+      if(!hoy||!hoy[3]){
+        if(dMin>cercana.rEnt){ await sock.sendMessage(jid,{text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}`},{quoted:m}); return }
+        const h=horaMX();
+        const jornadaTxt = horaProgObj? `${horaProgObj.entrada}${horaProgObj.salida?` - ${horaProgObj.salida}`:''}` : "8h";
+        const row = [tel10Final,nombreCompleto,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',calcularHorasTrabajadas(h,""),"0",jornadaTxt];
+        if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:M',valueInputOption:'USER_ENTERED',requestBody:{values:[row]}});
+        else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!A${idx+1}:M${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[row]}});
+        await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreCompleto} en ${cercana.nombre}`})
+
+        // --- FIX RETARDO GERENTES ---
+        if (estatus.startsWith('RETARDO')) {
+          try {
+            let grupoGerentesDestino = GRUPO_BUCARELI_ID;
+            if (cercana.id === 'COYOACAN' || cercana.id === 'HOTEL') {
+              grupoGerentesDestino = GRUPO_COYOACAN_ID;
+            } else if (cercana.id === 'JUAREZ') {
+              grupoGerentesDestino = GRUPO_JUAREZ_ID;
+            } else if (cercana.id === 'BUCARELI') {
+              grupoGerentesDestino = GRUPO_BUCARELI_ID;
+            }
+            // Si es Juárez/Bucareli, avisa a ambos por si tienes 2 grupos separados
+            if (cercana.id === 'JUAREZ' || cercana.id === 'BUCARELI') {
+               if (GRUPO_JUAREZ_ID!== GRUPO_BUCARELI_ID) {
+                 await sock.sendMessage(GRUPO_JUAREZ_ID, { text: `⏰ *${estatus}* - ${nombreCompleto} en ${cercana.nombre} - Entró ${h}` });
+               }
+            }
+            await sock.sendMessage(grupoGerentesDestino, { text: `⏰ *${estatus}* - ${nombreCompleto} en ${cercana.nombre} - Entró ${h}` });
+            console.log(`✅ Retardo notificado a gerentes: ${grupoGerentesDestino}`);
+          } catch (e) {
+            console.log('Error notificando retardo a gerentes:', e.message);
+          }
+        }
+      } else {
+        if(hoy[5]){ await sock.sendMessage(jid,{text:`Salida ya registrada`}); return }
+        if(dMin>cercana.rSal){ await sock.sendMessage(jid,{text:`No puedes checar salida a ${Math.round(dMin)}m`},{quoted:m}); return }
+        const h=horaMX(); const jornadaTxt = hoy[12]||"8h"; const { trabajadas, extra }=calcularExtra(hoy[3],h,horaProgObj?.entrada||null,horaProgObj?.salida||null);
+        await sClient.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:`Asistencia!F${idx+1}:M${idx+1}`, valueInputOption:'USER_ENTERED', requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),trabajadas,extra,jornadaTxt]]} });
+        await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto}`})
+      }
     }catch(e){ console.error(e) }
   })
 }
