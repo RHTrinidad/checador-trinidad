@@ -54,16 +54,49 @@ function normaliza(s){ return (s||'').toString().normalize('NFD').replace(/[\u03
 function scoreEmpleado(corto, completo, buscarNorm){ const c = normaliza(corto); const d = normaliza(completo); if(c === buscarNorm) return 100; if(c.startsWith(buscarNorm)) return 90; if(c.includes(buscarNorm) || d.includes(buscarNorm)) return 10; return -1 }
 
 function detectarSucursalCompra(texto){ const t = normaliza(texto); if(t.includes('bucareli')) return 'BUCARELI'; if(t.includes('coyoacan') || t.includes('coyo')) return 'COYOACAN'; if(t.includes('juarez')) return 'JUAREZ'; return 'BUCARELI' }
+
 function parseCompra(texto){
-  const raw = texto || ""; const norm = normaliza(raw)
-  let folio = null; const mFolio = raw.match(/(?:AC|NOTA|FOLIO|FAC|#)[\s\-:#]*([A-Z0-9\-]{2,25})/i); if(mFolio) folio = mFolio[0].toUpperCase().replace(/\s+/g,'').replace(/:/g,'')
-  let concepto = null; for(const c of CONCEPTOS){ if(norm.includes(normaliza(c))) { concepto = c; break } }
-  let monto = ""; const mMonto = raw.match(/\$?\s*([\d,]+\.?\d*)/); if(mMonto) monto = mMonto[1]
-  return { folio: folio || `AC-${Date.now().toString().slice(-6)}`, concepto: concepto || "HIELO", proveedor:"", monto: monto||"0", fecha: fechaLaboral(), sucursal: detectarSucursalCompra(raw), raw, semana: getSemanaActual() }
+  const raw = (texto||"").trim()
+  if(!raw) return null
+  const norm = normaliza(raw)
+  let folio = null
+  const mFolio = raw.match(/(?:TICKET|AC|NOTA|FOLIO|FAC|#)[\s\-:#]*([A-Z0-9\-]{2,25})/i)
+  if(mFolio) folio = mFolio[1].toUpperCase()
+  if(!folio){
+    const mt = raw.match(/Ticket[:\s]*(\d+)/i)
+    if(mt) folio = `T-${mt[1]}`
+  }
+  let concepto = "OTROS"
+  for(const c of CONCEPTOS){ if(norm.includes(normaliza(c))) { concepto = c; break } }
+  if(norm.includes('bonless')||norm.includes('boneless')||norm.includes('bles')) concepto="POLLO"
+  if(norm.includes('tres b')||norm.includes('3b')||norm.includes('abarrotes')) concepto="ABARROTES"
+
+  let monto = ""
+  // Busca $394.00 o $394
+  const mMonto = raw.match(/\$?\s*([\d,]{1,6}(?:\.\d{2})?)/)
+  if(mMonto) monto = mMonto[1].replace(/,/g,'')
+
+  let prov = ""
+  if(norm.includes('tres b')||norm.includes('3b')) prov="TIENDAS TRES B SA DE CV"
+  else if(norm.includes('hielo')) prov=""
+
+  // Si no hay monto, no es válido
+  if(!monto) return null
+
+  return {
+    folio: folio || `AC-${Date.now().toString().slice(-6)}`,
+    concepto,
+    proveedor:prov,
+    monto,
+    fecha: fechaLaboral(),
+    sucursal: detectarSucursalCompra(raw),
+    raw,
+    semana: getSemanaActual()
+  }
 }
+
 async function registrarCompra(datos, jid, nombrePersona){
   const sClient = await sheetsClient()
-  // A Semana, B Fecha, C Sucursal, D Proveedor, E #Comprob, F Importe, G Concepto, H Area VACIO, I forma pago VACIO
   await sClient.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_COMPRAS_ID,
     range:`${SHEET_RESUMEN}!A:I`,
@@ -78,7 +111,7 @@ async function registrarCompra(datos, jid, nombrePersona){
       requestBody:{ values:[[ datos.folio, datos.concepto, "1", datos.monto, datos.monto, datos.sucursal, datos.fecha ]] }
     })
   }catch(e){}
-  return { ok:true, msg:`✅ ${datos.folio} $${datos.monto} - ${datos.concepto} - ${datos.sucursal} guardado en RESUMEN (Área y forma pago vacíos)` }
+  return { ok:true, msg:`✅ ${datos.folio} $${datos.monto} - ${datos.concepto} - ${datos.sucursal} - ${datos.proveedor} guardado en RESUMEN (Área y forma pago vacíos para que edites)` }
 }
 async function generarExcelCompras(filtro, jid, sock){
   const rows = await getRows(`${SHEET_RESUMEN}!A2:I`, SPREADSHEET_COMPRAS_ID)
@@ -103,7 +136,7 @@ async function start(){
   sock.ev.on('connection.update', async ({connection, lastDisconnect, qr}) => {
     if (qr) { lastQR = qr; qrcodeTerminal.generate(qr,{small:false}) }
     if (connection === 'close') { const code=lastDisconnect?.error?.output?.statusCode; if(code!==DisconnectReason.loggedOut) setTimeout(()=>start(),5000) }
-    if (connection === 'open') { console.log('✅ CONECTADO - RESUMEN SIN AREA NI FORMA PAGO'); }
+    if (connection === 'open') { console.log('✅ CONECTADO - RESUMEN VACIO + VALIDA CAPTION'); }
   })
   sock.ev.on('messages.upsert', async ({messages})=>{
     try{
@@ -118,9 +151,12 @@ async function start(){
       if(tipoGrupo==='REPORTES'){
         if(/^compras/i.test(texto)){ const f = parseFiltroCompras(texto); await generarExcelCompras(f, jid, sock); return }
         if(esImagen){
-          console.log('📸 FOTO COMPRAS:', texto||'(sin caption)')
-          const datos = parseCompra(texto || "BUCARELI $360 HIELO")
-          if(!datos.monto || datos.monto==="0") datos.monto="360"
+          console.log('📸 FOTO:', texto||'(sin caption)')
+          const datos = parseCompra(texto)
+          if(!datos){
+            await sock.sendMessage(jid,{text:`⚠️ Foto sin datos.\n\nPara que lo guarde bien, escribe en el caption de la foto:\n\n*BUCARELI $394 ABARROTES TICKET 140 - TIENDAS TRES B*\n\nEjemplo para tu ticket:\n*BUCARELI $394 ABARROTES TICKET 140*\n\nYo saco Semana, Fecha, Proveedor solo. Tú luego llenas Área (COCINA/BARRA/GASTOS) y Forma pago (EFECTIVO/CREDITO/PAGADO CAJA/TARJETA) en el Sheet.`})
+            return
+          }
           const res = await registrarCompra(datos, jid, m.pushName||tel10)
           await sock.sendMessage(jid,{text:res.msg})
           return
