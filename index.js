@@ -1,4 +1,4 @@
-import { default as makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys'
+import { default as makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage } from '@whiskeysockets/baileys'
 import qrcodeTerminal from 'qrcode-terminal'
 import QRCode from 'qrcode'
 import express from 'express'
@@ -48,17 +48,20 @@ async function getRows(range, sid){ const s=await sheetsClient(); const r=await 
 function getRangoSemana(tipo){ const hoyMX = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})); const diaSem = hoyMX.getDay(); const lunesEstaSem = new Date(hoyMX); lunesEstaSem.setDate(hoyMX.getDate() - (diaSem===0?6:diaSem-1)); let lunes, domingo; if(tipo==='pasada'){ lunes=new Date(lunesEstaSem); lunes.setDate(lunes.getDate()-7); domingo=new Date(lunes); domingo.setDate(domingo.getDate()+6); } else { lunes=lunesEstaSem; domingo=hoyMX; } lunes.setHours(0,0,0,0); domingo.setHours(23,59,59,999); return { lunes, domingo, rangoTxt: `${lunes.toLocaleDateString('es-MX')} al ${domingo.toLocaleDateString('es-MX')} (${tipo})` } }
 function normaliza(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim() }
 
-// === CORRECCIÓN FINAL: USTEDES SON VICTOR HUGO, PROVEEDOR ES GASTROSOPHIA ===
+// REGLA FINAL CORRECTA: Nosotros = VICTOR HUGO POBLANO BRAVO (cliente), nunca es proveedor
 function normalizarProveedor(nombre){
   let n = (nombre||"").toUpperCase().trim()
-  // Ustedes son VICTOR HUGO POBLANO BRAVO, el proveedor que les vende es GASTROSOPHIA
-  if(n.includes("GASTRO") || n.includes("VICTOR HUGO") || n.includes("POBLANO BRAVO")) return "GASTROSOPHIA"
+  // Si la IA por error devuelve VICTOR HUGO, no lo usamos como proveedor
+  if(n.includes("VICTOR HUGO") || n.includes("POBLANO BRAVO") || n.includes("MAURICIO POBLANO")) return "GASTROSOPHIA" // Fallback solo si venia de factura de Gastrosophia que trae ambos nombres, pero Gastrosophia es el proveedor real
+  if(n.includes("GASTRO")) return "GASTROSOPHIA"
   if(n.includes("TRES B") || n.includes("3B") || n.includes("TIENDAS TRES")) return "TIENDAS TRES B"
   if(n.includes("FLORENTINA")) return "QUESOS FLORENTINA"
+  if(n.includes("MARCO") && n.includes("ANTONIO")) return "MARCO ANTONIO"
   if(!n || n.length < 3) return "PROVEEDOR OCASIONAL"
   return nombre.toUpperCase()
 }
-function detectarSucursalCompra(texto){ const t = normaliza(texto); if(t.includes('bucareli')) return 'BUCARELI'; return 'BUCARELI' }
+
+function detectarSucursalCompra(texto){ return 'BUCARELI' }
 function scoreEmpleado(corto, completo, buscarNorm){ const c = normaliza(corto); const d = normaliza(completo); if(c === buscarNorm) return 100; if(c.startsWith(buscarNorm)) return 90; if(c.includes(buscarNorm) || d.includes(buscarNorm)) return 10; return -1 }
 async function getHorarioBaseMap(){ try{ const rows = await getRows('Horario_Base!A2:K'); const map = {}; for(const f of rows){ const tel = (f[0]||'').replace(/\D/g,'').slice(-10); const nombre = (f[1]||'').toLowerCase().trim(); if(!nombre) continue; const dias = { 1:f[3], 2:f[4], 3:f[5], 4:f[6], 5:f[7], 6:f[8], 0:f[9] }; const descansos = new Set(); const horas = {}; for(const [numDia, valor] of Object.entries(dias)){ const v = (valor||'').toString().trim(); if(!v){ descansos.add(parseInt(numDia)); continue } const parsed = parseHorarioRango(v); if(!parsed) descansos.add(parseInt(numDia)); else horas[numDia]=parsed } const obj = { descansos, horas, nombreOriginal: f[1], tel, sucursal: f[2]||'' }; if(tel) map[tel]=obj; map[nombre]=obj; const primer=nombre.split(' ')[0]; if(primer &&!map[primer]) map[primer]=obj } return map }catch(e){ return {} } }
 let grupoFiltroCache = new Map()
@@ -75,10 +78,10 @@ async function leerTicketConIA(bufferImagen){
       body: JSON.stringify({
         model:'gpt-4o-mini',
         messages:[{ role:'user', content:[
-          {type:'text', text:`Lee este ticket/factura mexicana. Devuelve SOLO JSON: {proveedor, folio, importe_total, fecha_ticket: YYYY-MM-DD, concepto_sugerido, productos:[{nombre,cantidad,precio,total}]}. Si ves VICTOR HUGO POBLANO BRAVO y GASTROSOPHIA juntos, proveedor=GASTROSOPHIA. Si no hay proveedor legible, proveedor=PROVEEDOR OCASIONAL. concepto_sugerido de: ${CONCEPTOS.join(',')}.`},
+          {type:'text', text:`Eres un lector de facturas. NOSOTROS SOMOS "VICTOR HUGO POBLANO BRAVO" y tambien "MARIA TRINIDAD" y "MAURICIO POBLANO" - SOMOS EL CLIENTE, NUNCA SOMOS EL PROVEEDOR. Lee la factura y devuelve SOLO JSON: {proveedor, folio, importe_total, fecha_ticket: YYYY-MM-DD, concepto_sugerido, productos}. El campo proveedor DEBE SER EL QUE VENDE, nunca Victor Hugo, nunca Maria Trinidad, nunca Mauricio. Si el ticket es de GASTROSOPHIA, proveedor=GASTROSOPHIA. Si es de MARCO ANTONIO, proveedor=MARCO ANTONIO. Si es de TRES B, proveedor=TIENDAS TRES B. Si es de QUESOS FLORENTINA, proveedor=QUESOS FLORENTINA. Si no hay nombre legible, proveedor=PROVEEDOR OCASIONAL. concepto_sugerido de: ${CONCEPTOS.join(',')}.`},
           {type:'image_url', image_url:{url:`data:image/jpeg;base64,${base64}`}}
         ]}],
-        max_tokens:700
+        max_tokens:800
       })
     })
     const data = await resp.json()
@@ -129,7 +132,7 @@ async function start(){
   sock.ev.on('connection.update', async ({connection, lastDisconnect, qr}) => {
     if (qr) { lastQR = qr; qrcodeTerminal.generate(qr,{small:false}) }
     if (connection === 'close') { const code=lastDisconnect?.error?.output?.statusCode; if(code!==DisconnectReason.loggedOut) setTimeout(()=>start(),5000) }
-    if (connection === 'open') { console.log('✅ CONECTADO - CHECADOR + COMPRAS AUTO GASTROSOPHIA PROVEEDOR'); }
+    if (connection === 'open') { console.log('✅ CONECTADO - LOGICA FINAL VICTOR HUGO = NOSOTROS'); }
   })
   sock.ev.on('messages.upsert', async ({messages})=>{
     try{
@@ -145,28 +148,24 @@ async function start(){
       if(tipoGrupo==='REPORTES'){
         if(/^compras/i.test(texto)){ const f = parseFiltroCompras(texto); await generarExcelCompras(f, jid, sock); return }
         if(esImagen){
-          console.log('📸 FOTO COMPRA - LEYENDO CON IA...')
           try{
-            const buffer = await sock.downloadMediaMessage(m, 'buffer', {}, { logger: P({level:'fatal'}) })
+            const buffer = await downloadMediaMessage(m, 'buffer', {}, { logger: P({level:'fatal'}), reuploadRequest: sock.updateMediaMessage })
             let datosIA = await leerTicketConIA(buffer)
-            if(!datosIA){
-              await sock.sendMessage(jid,{text:`⚠️ Falta OPENAI_API_KEY, no pude leer auto. Escribe manual: BUCARELI $394 ABARROTES`})
-              return
-            }
+            if(!datosIA){ await sock.sendMessage(jid,{text:`⚠️ No pude leer auto. Falta OPENAI_API_KEY`}); return }
             let datosFinal = {
               folio: datosIA.folio || `AC-${Date.now().toString().slice(-6)}`,
               concepto: datosIA.concepto_sugerido || "OTROS",
               proveedor: normalizarProveedor(datosIA.proveedor),
               monto: (datosIA.importe_total||"0").toString().replace(/,/g,''),
               fecha: datosIA.fecha_ticket || fechaLaboral(),
-              sucursal: detectarSucursalCompra(texto) || "BUCARELI",
+              sucursal: "BUCARELI",
               semana: getSemanaActual(),
               productos: datosIA.productos || null
             }
             const res = await registrarCompra(datosFinal, jid, m.pushName||tel10)
-            await sock.sendMessage(jid,{text: `${res.msg}\n📄 Prov: ${datosFinal.proveedor} | Folio: ${datosFinal.folio}`})
+            await sock.sendMessage(jid,{text: res.msg})
             return
-          }catch(e){ console.log(e); await sock.sendMessage(jid,{text:'Error IA: '+e.message}) ; return }
+          }catch(e){ console.error(e); await sock.sendMessage(jid,{text:'Error IA: '+e.message}) ; return }
         }
       }
 
@@ -182,7 +181,7 @@ async function start(){
       if(tipoGrupo === 'GERENTES') return
       if(!loc) return
       const lat=loc.degreesLatitude,lng=loc.degreesLongitude; let cercana=null,dMin=Infinity; for(const s of SUCURSALES){ const d=distM(lat,lng,s.lat,s.lng); if(d<dMin){dMin=d; cercana=s} }
-      const empRowsFull = await getRows('Empleados!A:K'); const getLid = (row)=> (row.find(x=>String(x).includes('@lid'))||'').trim(); let emp=null; let empRowIndex=-1; if(tel10.length>=10){ const idx = empRowsFull.findIndex((r,i)=> i>0 && r[0] && r[0].replace(/\D/g,'').slice(-10)===tel10); if(idx>-1){ emp=empRowsFull[idx]; empRowIndex=idx+1 } } if(!emp && rawLid.includes('@lid')){ const idx = empRowsFull.findIndex((r,i)=> i>0 && getLid(r)===rawLid); if(idx>-1){ emp=empRowsFull[idx]; empRowIndex=idx+1; tel10=(emp[0]||'').replace(/\D/g,'').slice(-10) } }
+      const empRowsFull = await getRows('Empleados!A:K'); const getLid = (row)=> (row.find(x=>String(x).includes('@lid'))||'').trim(); let emp=null; if(tel10.length>=10){ const idx = empRowsFull.findIndex((r,i)=> i>0 && r[0] && r[0].replace(/\D/g,'').slice(-10)===tel10); if(idx>-1){ emp=empRowsFull[idx] } } if(!emp && rawLid.includes('@lid')){ const idx = empRowsFull.findIndex((r,i)=> i>0 && getLid(r)===rawLid); if(idx>-1){ emp=empRowsFull[idx]; tel10=(emp[0]||'').replace(/\D/g,'').slice(-10) } }
       const nombreCompleto = emp? (emp[3] || emp[1]) : (m.pushName||tel10||'Desconocido'); const telFinal=emp?(emp[0]||'').replace(/\D/g,''):tel; const tel10Final=telFinal.slice(-10)||tel10; const fLab=fechaLaboral(); const asisRows=await getRows('Asistencia!A:M'); const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10Final&&r[2]===fLab); const hoy=idx>-1?asisRows[idx]:null; const sClient=await sheetsClient(); const baseMap=await getHorarioBaseMap(); const baseInfo=baseMap[tel10Final]||baseMap[normaliza(nombreCompleto).split(' ')[0]]||null; let estatus='A TIEMPO'; let horaProgObj=null; if(baseInfo){ const fecha=new Date(fLab+'T12:00:00'); const diaNum=fecha.getDay(); if(baseInfo.descansos.has(diaNum)){ estatus='DESCANSO' } else if(baseInfo.horas[diaNum]){ horaProgObj=baseInfo.horas[diaNum]; if(horaProgObj.entrada!=='LIBRE'){ const hp=horaProgObj.entrada; const dif=minutos(horaMX())-minutos(hp); if(dif>15) estatus=`RETARDO ${dif}min (Prog ${hp})`; else estatus=`A TIEMPO Prog ${hp}` } } }
       if(!hoy||!hoy[3]){ if(dMin>cercana.rEnt){ await sock.sendMessage(jid,{text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}`},{quoted:m}); return } const h=horaMX(); const jornadaTxt = horaProgObj? `${horaProgObj.entrada}${horaProgObj.salida?` - ${horaProgObj.salida}`:''}` : "8h"; const row = [tel10Final,nombreCompleto,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',calcularHorasTrabajadas(h,""),"0",jornadaTxt]; if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:M',valueInputOption:'USER_ENTERED',requestBody:{values:[row]}}); else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!A${idx+1}:M${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[row]}}); await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreCompleto} en ${cercana.nombre}`}) }else{ if(hoy[5]){ await sock.sendMessage(jid,{text:`Salida ya registrada`}); return } if(dMin>cercana.rSal){ await sock.sendMessage(jid,{text:`No puedes checar salida a ${Math.round(dMin)}m`},{quoted:m}); return } const h=horaMX(); const jornadaTxt = hoy[12]||"8h"; const { trabajadas, extra }=calcularExtra(hoy[3],h,horaProgObj?.entrada||null,horaProgObj?.salida||null); await sClient.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:`Asistencia!F${idx+1}:M${idx+1}`, valueInputOption:'USER_ENTERED', requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),trabajadas,extra,jornadaTxt]]} }); await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto}`}) }
     }catch(e){ console.error(e) }
