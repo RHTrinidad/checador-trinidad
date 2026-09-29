@@ -10,6 +10,7 @@ import P from 'pino'
 const require = createRequire(import.meta.url)
 const { google } = require('googleapis')
 const ExcelJS = require('exceljs')
+import { createWorker } from 'tesseract.js'
 
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID
 const SPREADSHEET_COMPRAS_ID = process.env.SPREADSHEET_COMPRAS_ID || "1eidbKAX5QAaDvDj_oe5BBQis3TA0WUohVZE0MH4cug4"
@@ -48,11 +49,9 @@ async function getRows(range, sid){ const s=await sheetsClient(); const r=await 
 function getRangoSemana(tipo){ const hoyMX = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})); const diaSem = hoyMX.getDay(); const lunesEstaSem = new Date(hoyMX); lunesEstaSem.setDate(hoyMX.getDate() - (diaSem===0?6:diaSem-1)); let lunes, domingo; if(tipo==='pasada'){ lunes=new Date(lunesEstaSem); lunes.setDate(lunes.getDate()-7); domingo=new Date(lunes); domingo.setDate(domingo.getDate()+6); } else { lunes=lunesEstaSem; domingo=hoyMX; } lunes.setHours(0,0,0,0); domingo.setHours(23,59,59,999); return { lunes, domingo, rangoTxt: `${lunes.toLocaleDateString('es-MX')} al ${domingo.toLocaleDateString('es-MX')} (${tipo})` } }
 function normaliza(s){ return (s||'').toString().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim() }
 
-// REGLA FINAL CORRECTA: Nosotros = VICTOR HUGO POBLANO BRAVO (cliente), nunca es proveedor
 function normalizarProveedor(nombre){
   let n = (nombre||"").toUpperCase().trim()
-  // Si la IA por error devuelve VICTOR HUGO, no lo usamos como proveedor
-  if(n.includes("VICTOR HUGO") || n.includes("POBLANO BRAVO") || n.includes("MAURICIO POBLANO")) return "GASTROSOPHIA" // Fallback solo si venia de factura de Gastrosophia que trae ambos nombres, pero Gastrosophia es el proveedor real
+  if(n.includes("VICTOR HUGO") || n.includes("POBLANO BRAVO") || n.includes("MAURICIO POBLANO") || n.includes("TRINIDAD")) return null // Nunca es proveedor, es cliente
   if(n.includes("GASTRO")) return "GASTROSOPHIA"
   if(n.includes("TRES B") || n.includes("3B") || n.includes("TIENDAS TRES")) return "TIENDAS TRES B"
   if(n.includes("FLORENTINA")) return "QUESOS FLORENTINA"
@@ -68,32 +67,64 @@ let grupoFiltroCache = new Map()
 async function getFiltroPorGrupo(jid, sock){ if(GRUPOS.REPORTES.includes(jid)) return null; if(jid === GRUPO_COYOACAN_ID || jid === GRUPO_CHECADOR_COYOACAN_ID) return 'coyoacan'; if(jid === GRUPO_BUCARELI_ID || jid === GRUPO_JUAREZ_ID || jid === GRUPO_CHECADOR_BUCARELI_ID) return 'juarez'; if(grupoFiltroCache.has(jid)) return grupoFiltroCache.get(jid); try{ const meta = await sock.groupMetadata(jid); const subj = (meta.subject || '').toLowerCase(); let filtro = null; if(subj.includes('coyo')) filtro = 'coyoacan'; else if(subj.includes('bucareli') || subj.includes('juarez')) filtro = 'juarez'; grupoFiltroCache.set(jid, filtro); return filtro }catch{ return null } }
 function sucursalCoincideConFiltro(sucEmpleado, filtro){ if(!filtro) return true; const s = (sucEmpleado||'').toLowerCase(); if(filtro === 'coyoacan') return s.includes('coyo') || s.includes('hotel') || s.includes('trinidad'); if(filtro === 'juarez') return s.includes('juarez') || s.includes('bucareli'); return s.includes(filtro) }
 
-async function leerTicketConIA(bufferImagen){
-  if(!process.env.OPENAI_API_KEY) return null
+// ========= OCR GRATIS SIN OPENAI =========
+async function leerTicketConOCR(bufferImagen){
   try{
-    const base64 = bufferImagen.toString('base64')
-    const resp = await fetch('https://api.openai.com/v1/chat/completions',{
-      method:'POST',
-      headers:{'Authorization':`Bearer ${process.env.OPENAI_API_KEY}`,'Content-Type':'application/json'},
-      body: JSON.stringify({
-        model:'gpt-4o-mini',
-        messages:[{ role:'user', content:[
-          {type:'text', text:`Eres un lector de facturas. NOSOTROS SOMOS "VICTOR HUGO POBLANO BRAVO" y tambien "MARIA TRINIDAD" y "MAURICIO POBLANO" - SOMOS EL CLIENTE, NUNCA SOMOS EL PROVEEDOR. Lee la factura y devuelve SOLO JSON: {proveedor, folio, importe_total, fecha_ticket: YYYY-MM-DD, concepto_sugerido, productos}. El campo proveedor DEBE SER EL QUE VENDE, nunca Victor Hugo, nunca Maria Trinidad, nunca Mauricio. Si el ticket es de GASTROSOPHIA, proveedor=GASTROSOPHIA. Si es de MARCO ANTONIO, proveedor=MARCO ANTONIO. Si es de TRES B, proveedor=TIENDAS TRES B. Si es de QUESOS FLORENTINA, proveedor=QUESOS FLORENTINA. Si no hay nombre legible, proveedor=PROVEEDOR OCASIONAL. concepto_sugerido de: ${CONCEPTOS.join(',')}.`},
-          {type:'image_url', image_url:{url:`data:image/jpeg;base64,${base64}`}}
-        ]}],
-        max_tokens:800
-      })
-    })
-    const data = await resp.json()
-    let txt = data.choices?.[0]?.message?.content || ""
-    txt = txt.replace(/```json|```/g,'').trim()
-    return JSON.parse(txt)
-  }catch(e){ console.log('IA fail', e.message); return null }
+    const worker = await createWorker('spa+eng');
+    const ret = await worker.recognize(bufferImagen);
+    await worker.terminate();
+    let texto = ret.data.text || "";
+    console.log("OCR TEXTO:", texto.substring(0,500));
+    let upper = texto.toUpperCase();
+
+    // Buscar total: TOTAL, IMPORTE, $ etc
+    let monto = "0";
+    let mTotal = upper.match(/(?:TOTAL|IMPORTE|SUMA)[^\d]*\$?\s*([\d,]+\.\d{2})/i) || upper.match(/\$\s*([\d,]+\.\d{2})/) || upper.match(/([\d,]+\.\d{2})/);
+    if(mTotal) monto = mTotal[1].replace(/,/g,'');
+
+    // Buscar folio: FOLIO, AC, etc
+    let folio = `AC-${Date.now().toString().slice(-6)}`;
+    let mFolio = upper.match(/FOLIO[^\d]*(\d+)/i) || upper.match(/\bAC\s*(\d+)/i) || upper.match(/\bF(\d{4,})\b/i);
+    if(mFolio) folio = `AC-${mFolio[1]}`;
+
+    // Buscar proveedor: si dice GASTROSOPHIA, TRES B, MARCO ANTONIO, etc
+    let proveedor = "PROVEEDOR OCASIONAL";
+    if(upper.includes("GASTRO")) proveedor = "GASTROSOPHIA";
+    else if(upper.includes("TRES B") || upper.includes("TIENDAS TRES") || upper.includes("3B")) proveedor = "TIENDAS TRES B";
+    else if(upper.includes("MARCO") && upper.includes("ANTONIO")) proveedor = "MARCO ANTONIO";
+    else if(upper.includes("FLORENTINA")) proveedor = "QUESOS FLORENTINA";
+    else {
+      // Toma primera linea que no sea VICTOR HUGO
+      let lineas = texto.split('\n').map(l=>l.trim()).filter(l=>l.length>3);
+      for(let lin of lineas){
+        let norm = normalizarProveedor(lin);
+        if(norm){ proveedor = norm; break; }
+      }
+    }
+    // Si proveedor final es VICTOR HUGO, descartar
+    if(!normalizarProveedor(proveedor)) proveedor = "PROVEEDOR OCASIONAL";
+
+    let concepto = "OTROS";
+    if(upper.includes("CARNE") || upper.includes("DIEZMILLO") || upper.includes("RIB EYE")) concepto = "CARNE";
+    else if(upper.includes("POLLO")) concepto = "POLLO";
+    else if(upper.includes("VERDURA")) concepto = "VERDURAS";
+    else if(upper.includes("ABARROTES") || upper.includes("3B")) concepto = "ABARROTES";
+
+    return {
+      proveedor,
+      folio,
+      importe_total: monto,
+      fecha_ticket: fechaLaboral(),
+      concepto_sugerido: concepto,
+      productos: null
+    };
+  }catch(e){ console.log('OCR fail', e.message); return null }
 }
 
 async function registrarCompra(datos, jid, nombrePersona){
   const sClient = await sheetsClient()
-  const proveedorFinal = normalizarProveedor(datos.proveedor)
+  const provNorm = normalizarProveedor(datos.proveedor)
+  const proveedorFinal = provNorm || "PROVEEDOR OCASIONAL"
   await sClient.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_COMPRAS_ID,
     range:`${SHEET_RESUMEN}!A:I`,
@@ -108,7 +139,7 @@ async function registrarCompra(datos, jid, nombrePersona){
       await sClient.spreadsheets.values.append({ spreadsheetId: SPREADSHEET_COMPRAS_ID, range:`${SHEET_INSUMOS}!A:G`, valueInputOption:'USER_ENTERED', requestBody:{ values:[[ datos.folio, datos.concepto, "1", datos.monto, datos.monto, datos.sucursal, datos.fecha ]] } })
     }
   }catch(e){ console.log(e) }
-  return { ok:true, msg:`✅ ${datos.folio} $${datos.monto} - ${datos.concepto} - ${proveedorFinal} guardado.` }
+  return { ok:true, msg:`✅ ${datos.folio} $${datos.monto} - ${datos.concepto} - ${proveedorFinal} guardado (OCR).` }
 }
 async function generarExcelCompras(filtro, jid, sock){
   const rows = await getRows(`${SHEET_RESUMEN}!A2:I`, SPREADSHEET_COMPRAS_ID)
@@ -132,7 +163,7 @@ async function start(){
   sock.ev.on('connection.update', async ({connection, lastDisconnect, qr}) => {
     if (qr) { lastQR = qr; qrcodeTerminal.generate(qr,{small:false}) }
     if (connection === 'close') { const code=lastDisconnect?.error?.output?.statusCode; if(code!==DisconnectReason.loggedOut) setTimeout(()=>start(),5000) }
-    if (connection === 'open') { console.log('✅ CONECTADO - LOGICA FINAL VICTOR HUGO = NOSOTROS'); }
+    if (connection === 'open') { console.log('✅ CONECTADO - OCR GRATIS - VICTOR HUGO = CLIENTE'); }
   })
   sock.ev.on('messages.upsert', async ({messages})=>{
     try{
@@ -150,12 +181,13 @@ async function start(){
         if(esImagen){
           try{
             const buffer = await downloadMediaMessage(m, 'buffer', {}, { logger: P({level:'fatal'}), reuploadRequest: sock.updateMediaMessage })
-            let datosIA = await leerTicketConIA(buffer)
-            if(!datosIA){ await sock.sendMessage(jid,{text:`⚠️ No pude leer auto. Falta OPENAI_API_KEY`}); return }
+            await sock.sendMessage(jid,{text:`🔍 Leyendo ticket con OCR gratis...`})
+            let datosIA = await leerTicketConOCR(buffer)
+            if(!datosIA || datosIA.importe_total=="0"){ await sock.sendMessage(jid,{text:`⚠️ No pude leer el total. Foto borrosa. Intenta con foto más clara o escribe: PROVEEDOR $MONTO CONCEPTO`}); return }
             let datosFinal = {
               folio: datosIA.folio || `AC-${Date.now().toString().slice(-6)}`,
               concepto: datosIA.concepto_sugerido || "OTROS",
-              proveedor: normalizarProveedor(datosIA.proveedor),
+              proveedor: datosIA.proveedor,
               monto: (datosIA.importe_total||"0").toString().replace(/,/g,''),
               fecha: datosIA.fecha_ticket || fechaLaboral(),
               sucursal: "BUCARELI",
@@ -165,7 +197,7 @@ async function start(){
             const res = await registrarCompra(datosFinal, jid, m.pushName||tel10)
             await sock.sendMessage(jid,{text: res.msg})
             return
-          }catch(e){ console.error(e); await sock.sendMessage(jid,{text:'Error IA: '+e.message}) ; return }
+          }catch(e){ console.error(e); await sock.sendMessage(jid,{text:'Error OCR: '+e.message}) ; return }
         }
       }
 
