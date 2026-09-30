@@ -414,5 +414,4 @@ if(baseInfo){
   }
 }catch(e){ console.error(e) }
   }
-}
 start()
