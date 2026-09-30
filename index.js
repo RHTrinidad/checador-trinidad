@@ -274,7 +274,6 @@ app.listen(process.env.PORT||3000,()=>console.log('WEB en puerto '+ (process.env
 
 async function start(){
   const { state, saveCreds } = await useMultiFileAuthState('/app/baileys_auth')
-  const { state, saveCreds } = await useMultiFileAuthState('./baileys_auth')
   const { version } = await fetchLatestBaileysVersion()
   const sock=makeWASocket({ version, auth:state, logger:P({level:'fatal'}), printQRInTerminal:false, markOnlineOnConnect:false, syncFullHistory:false, shouldSyncHistoryMessage:()=>false, browser:['Trinidad Bot','Chrome','121.0.0'], getMessage: async () => undefined })
   sock.ev.on('creds.update', saveCreds)
