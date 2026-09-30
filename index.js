@@ -332,86 +332,83 @@ async function start(){
       const lat=loc.degreesLatitude,lng=loc.degreesLongitude; let cercana=null,dMin=Infinity; for(const s of SUCURSALES){ const d=distM(lat,lng,s.lat,s.lng); if(d<dMin){dMin=d; cercana=s} }
       const empRowsFull = await getRows('Empleados!A:K'); const getLid = (row)=> (row.find(x=>String(x).includes('@lid'))||'').trim(); let emp=null; if(tel10.length>=10){ const idx = empRowsFull.findIndex((r,i)=> i>0 && r[0] && r[0].replace(/\D/g,'').slice(-10)===tel10); if(idx>-1){ emp=empRowsFull[idx] } } if(!emp && rawLid.includes('@lid')){ const idx = empRowsFull.findIndex((r,i)=> i>0 && getLid(r)===rawLid); if(idx>-1){ emp=empRowsFull[idx]; tel10=(emp[0]||'').replace(/\D/g,'').slice(-10) } }
       const nombreCompleto = emp? (emp[3] || emp[1]) : (m.pushName||tel10||'Desconocido');
-const telFinal=emp?(emp[0]||'').replace(/\D/g,''):tel;
-const tel10Final=telFinal.slice(-10)||tel10;
-const fLab=fechaLaboral();
-const asisRows=await getRows('Asistencia!A:M');
-const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10Final&&r[2]===fLab);
-const hoy=idx>-1?asisRows[idx]:null;
-const sClient=await sheetsClient();
-const baseMap=await getHorarioBaseMap();
-const baseInfo=baseMap[tel10Final]||baseMap[normaliza(nombreCompleto).split(' ')[0]]||null;
-let estatus='A TIEMPO';
-let horaProgObj=null;
-let esRetardo=false;
-if(baseInfo){
-  const fecha=new Date(fLab+'T12:00:00');
-  const diaNum=fecha.getDay();
-  if(baseInfo.descansos.has(diaNum)){
-    estatus='DESCANSO'
-  } else if(baseInfo.horas[diaNum]){
-    horaProgObj=baseInfo.horas[diaNum];
-    if(horaProgObj.entrada!=='LIBRE'){
-      const hp=horaProgObj.entrada;
-      const dif=minutos(horaMX())-minutos(hp);
-      if(dif>1){
-        estatus=`RETARDO ${dif}min (Prog ${hp})`;
-        esRetardo=true;
-      } else {
-        estatus=`A TIEMPO Prog ${hp}`
+      const telFinal=emp?(emp[0]||'').replace(/\D/g,''):tel;
+      const tel10Final=telFinal.slice(-10)||tel10;
+      const fLab=fechaLaboral();
+      const asisRows=await getRows('Asistencia!A:M');
+      const idx=asisRows.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10Final&&r[2]===fLab);
+      const hoy=idx>-1?asisRows[idx]:null;
+      const sClient=await sheetsClient();
+      const baseMap=await getHorarioBaseMap();
+      const baseInfo=baseMap[tel10Final]||baseMap[normaliza(nombreCompleto).split(' ')[0]]||null;
+      let estatus='A TIEMPO';
+      let horaProgObj=null;
+      let esRetardo=false;
+      let minRetardo=0;
+      let horaProg='';
+      if(baseInfo){
+        const fecha=new Date(fLab+'T12:00:00');
+        const diaNum=fecha.getDay();
+        if(baseInfo.descansos.has(diaNum)){
+          estatus='DESCANSO'
+        } else if(baseInfo.horas[diaNum]){
+          horaProgObj=baseInfo.horas[diaNum];
+          horaProg=horaProgObj.entrada||'';
+          if(horaProgObj.entrada!=='LIBRE'){
+            const hp=horaProgObj.entrada;
+            const dif=minutos(horaMX())-minutos(hp);
+            if(dif>1){
+              estatus=`RETARDO ${dif}min (Prog ${hp})`;
+              esRetardo=true;
+              minRetardo=dif;
+            } else {
+              estatus=`A TIEMPO Prog ${hp}`
+            }
+          }
+        }
       }
-    }
-  }
-}
-      if(!hoy||!hoy[3]){
-  if(dMin>cercana.rEnt){
-    await sock.sendMessage(jid,{text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}`},{quoted:m});
-    return
-  }
-  const h=horaMX();
-  const jornadaTxt = horaProgObj? `${horaProgObj.entrada}${horaProgObj.salida?` - ${horaProgObj.salida}`:''}` : "8h";
-  const row = [tel10Final,nombreCompleto,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',calcularHorasTrabajadas(h,""),"0",jornadaTxt];
-  if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:M',valueInputOption:'USER_ENTERED',requestBody:{values:[row]}});
-  else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!A${idx+1}:M${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[row]}});
 
-  await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreCompleto} en ${cercana.nombre}`});
+      try{
+        if(!hoy ||!hoy[3]){
+          if(dMin>cercana.rEnt){
+            await sock.sendMessage(jid,{text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}`},{quoted:m});
+            return
+          }
+          const h=horaMX();
+          const jornadaTxt = horaProgObj? `${horaProgObj.entrada}${horaProgObj.salida?` - ${horaProgObj.salida}`:''}` : "8h";
+          const row = [tel10Final,nombreCompleto,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',calcularHorasTrabajadas(h,""),"0",jornadaTxt];
+          if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:M',valueInputOption:'USER_ENTERED',requestBody:{values:[row]}});
+          else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!A${idx+1}:M${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[row]}});
+          await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreCompleto} en ${cercana.nombre} - ${h}`});
+          // --- SOLO AVISA RETARDO A GERENTES ---
+          if(esRetardo){
+            let grupoGerente = null;
+            if(cercana.id === 'COYOACAN' || cercana.id === 'HOTEL') grupoGerente = GRUPO_COYOACAN_ID;
+            else grupoGerente = GRUPO_BUCARELI_ID;
+            if(grupoGerente){
+              try{
+                await sock.sendMessage(grupoGerente, {text:`⏰ RETARDO ${minRetardo}min (Prog ${horaProg}) - ${nombreCompleto} en ${cercana.nombre} - ${h}`});
+              }catch(e){}
+            }
+          }
+        }else{
+          if(hoy[5]){
+            await sock.sendMessage(jid,{text:`Salida ya registrada`});
+            return
+          }
+          if(dMin>cercana.rSal){
+            await sock.sendMessage(jid,{text:`No puedes checar salida a ${Math.round(dMin)}m`},{quoted:m});
+            return
+          }
+          const h=horaMX();
+          const jornadaTxt = hoy[12]||"8h";
+          const { trabajadas, extra }=calcularExtra(hoy[3],h,horaProgObj?.entrada||null,horaProgObj?.salida||null);
+          await sClient.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:`Asistencia!F${idx+1}:M${idx+1}`, valueInputOption:'USER_ENTERED', requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),trabajadas,extra,jornadaTxt]]} });
+          await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto} en ${cercana.nombre} - ${h} - Trab ${trabajadas} Extra ${extra}`});
+        }
+      }catch(e){ console.error(e) }
 
-  // --- AVISO A GERENTES ---
-   // --- AVISO A GERENTES - SOLO RETARDOS ---
-  try{
-  if(!hoy[5]){
-    const h=horaMX();
-    const estatus = esRetardo? `RETARDO ${minRetardo}min (Prog ${horaProg})` : `A TIEMPO Prog ${horaProg}`;
-    await sClient.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:`Asistencia!D${idx+1}:E${idx+1}`, valueInputOption:'USER_ENTERED', requestBody:{values:[[h,estatus]]} });
-    await sock.sendMessage(jid,{text:`${esRetardo?'⏰':'✅'} ${estatus} - ${nombreCompleto} en ${cercana.nombre} - ${h}`});
-
-    // --- SOLO AVISA RETARDO A GERENTES ---
-    if(esRetardo){
-      let grupoGerente = null;
-      if(cercana.id === 'COYOACAN' || cercana.id === 'HOTEL') grupoGerente = GRUPO_COYOACAN_ID;
-      else grupoGerente = GRUPO_BUCARELI_ID;
-      if(grupoGerente){
-        try{
-          await sock.sendMessage(grupoGerente, {text:`⏰ RETARDO ${minRetardo}min (Prog ${horaProg}) - ${nombreCompleto} en ${cercana.nombre} - ${h}`});
-        }catch(e){}
-      }
-    }
-
-  }else{
-    if(hoy[5]){
-      await sock.sendMessage(jid,{text:`Salida ya registrada`});
-      return
-    }
-    if(dMin>cercana.rSal){
-      await sock.sendMessage(jid,{text:`No puedes checar salida a ${Math.round(dMin)}m`},{quoted:m});
-      return
-    }
-    const h=horaMX();
-    const jornadaTxt = hoy[12]||"8h";
-    const { trabajadas, extra }=calcularExtra(hoy[3],h,horaProgObj?.entrada||null,horaProgObj?.salida||null);
-    await sClient.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:`Asistencia!F${idx+1}:M${idx+1}`, valueInputOption:'USER_ENTERED', requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),trabajadas,extra,jornadaTxt]]} });
-      await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto} en ${cercana.nombre} - ${h} - Trab ${trabajadas} Extra ${extra}`});
-  }
-}catch(e){ console.error(e) }
+    }catch(e){ console.error('Error en messages.upsert', e) }
+  })
 }
 start()
