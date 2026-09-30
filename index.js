@@ -387,9 +387,7 @@ if(baseInfo){
         await sock.sendMessage(grupoGerente, {text: `⏰ RETARDO ${estatus} - ${nombreCompleto} en ${cercana.nombre} - ${h}`});
       } catch(e){}
     }
-  }
-
-}else{
+ try{
   if(!hoy[5]){
   const h=horaMX();
   const estatus = esRetardo? `RETARDO ${minRetardo}min (Prog ${horaProg})` : `A TIEMPO Prog ${horaProg}`;
