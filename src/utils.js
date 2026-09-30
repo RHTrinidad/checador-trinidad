@@ -1,5 +1,6 @@
 export function distM(a,b,c,d){ const R=6371000, toRad=x=>x*Math.PI/180; const dLa=toRad(c-a), dLo=toRad(d-b); const q=Math.sin(dLa/2)**2+Math.cos(toRad(a))*Math.cos(toRad(c))*Math.sin(dLo/2)**2; return R*2*Math.atan2(Math.sqrt(q),Math.sqrt(1-q)) }
 export function fechaLaboral(d=new Date()){ const mx = new Date(d.toLocaleString('en-US',{timeZone:'America/Mexico_City'})); if(mx.getHours() < 4) mx.setDate(mx.getDate()-1); return `${mx.getFullYear()}-${String(mx.getMonth()+1).padStart(2,'0')}-${String(mx.getDate()).padStart(2,'0')}` }
+export function getSemanaActual(){ const hoy=new Date(); const jan1=new Date(hoy.getFullYear(),0,1); return Math.ceil((((hoy-jan1)/86400000)+jan1.getDay()+1)/7).toString() }
 export function horaMX(d=new Date()){ return d.toLocaleTimeString('es-MX',{hour12:false,timeZone:'America/Mexico_City'}) }
 export function minutos(h){ const mm = h?.toString().match(/(\d{1,2}):(\d{2})/); return mm? parseInt(mm[1])*60+parseInt(mm[2]) : 0 }
 export function parseHorarioRango(v){ const s=(v||'').toString().trim(); if(!s) return null; const low=s.toLowerCase(); if(low.includes('libre')||low.includes('flex')) return {entrada:'LIBRE',salida:null,raw:s}; if(low.includes('descanso')) return null; const m=s.match(/(\d{1,2}:\d{2})\s*(?:-|a)?\s*(\d{1,2}:\d{2})?/i); if(!m) return null; return {entrada:m[1],salida:m[2]||null,raw:s} }
