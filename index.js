@@ -410,8 +410,10 @@ if(baseInfo){
     const jornadaTxt = hoy[12]||"8h";
     const { trabajadas, extra }=calcularExtra(hoy[3],h,horaProgObj?.entrada||null,horaProgObj?.salida||null);
     await sClient.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:`Asistencia!F${idx+1}:M${idx+1}`, valueInputOption:'USER_ENTERED', requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),trabajadas,extra,jornadaTxt]]} });
-    await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto} en ${cercana.nombre} - ${h} - Trab ${trabajadas} Extra ${extra}`});
+      await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto} en ${cercana.nombre} - ${h} - Trab ${trabajadas} Extra ${extra}`});
   }
 }catch(e){ console.error(e) }
   }
+ }
+}
 start()
