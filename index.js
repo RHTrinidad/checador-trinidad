@@ -256,10 +256,25 @@ app.get('/qr',async(req,res)=>{
   const dataUrl=await QRCode.toDataURL(lastQR);
   res.send('<html><head><meta http-equiv="refresh" content="15"></head><body style="display:flex;justify-content:center;align-items:center;height:100vh;background:#fff"><div style="text-align:center"><h2>Escanea en WhatsApp > Dispositivos vinculados</h2><img src="'+dataUrl+'" style="width:500px;height:500px"><p>Se actualiza cada 15s</p></div></body></html>');
 });
+
+app.get('/backup', (req,res)=>{
+  try{
+    const dir = './baileys_auth';
+    if(!fs.existsSync(dir)) return res.json({error: 'no hay auth aun - escanea primero el QR'});
+    const files = fs.readdirSync(dir);
+    let out = {};
+    files.forEach(f=>{
+      try{ out[f] = fs.readFileSync(path.join(dir,f), 'utf8'); }catch{}
+    });
+    res.json(out);
+  }catch(e){ res.json({error:e.message}) }
+});
+
 app.listen(process.env.PORT||3000,()=>console.log('WEB en puerto '+ (process.env.PORT||3000)));
 
 async function start(){
   const { state, saveCreds } = await useMultiFileAuthState('/app/baileys_auth')
+  const { state, saveCreds } = await useMultiFileAuthState('./baileys_auth')
   const { version } = await fetchLatestBaileysVersion()
   const sock=makeWASocket({ version, auth:state, logger:P({level:'fatal'}), printQRInTerminal:false, markOnlineOnConnect:false, syncFullHistory:false, shouldSyncHistoryMessage:()=>false, browser:['Trinidad Bot','Chrome','121.0.0'], getMessage: async () => undefined })
   sock.ev.on('creds.update', saveCreds)
