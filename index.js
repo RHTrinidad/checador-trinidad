@@ -421,6 +421,6 @@ if(baseInfo){
   await sClient.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:`Asistencia!F${idx+1}:M${idx+1}`, valueInputOption:'USER_ENTERED', requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),trabajadas,extra,jornadaTxt]]} });
   await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto} en ${cercana.nombre} - ${h} - Trab ${trabajadas} Extra ${extra}`});
 }
-    }catch(e){ console.error(e)
+    catch(e){ console.error(e)
 }
 start()
