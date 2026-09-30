@@ -413,6 +413,5 @@ if(baseInfo){
       await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto} en ${cercana.nombre} - ${h} - Trab ${trabajadas} Extra ${extra}`});
   }
 }catch(e){ console.error(e) }
-  }
 }
 start()
