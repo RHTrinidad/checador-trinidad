@@ -390,22 +390,23 @@ if(baseInfo){
   }
 
 }else{
-  if(hoy[5]){
-    await sock.sendMessage(jid,{text:`Salida ya registrada`});
-    return
-  }
-  if(dMin>cercana.rSal){
-    await sock.sendMessage(jid,{text:`No puedes checar salida a ${Math.round(dMin)}m`},{quoted:m});
-    return
-  }
+  if(!hoy[5]){
   const h=horaMX();
-  const jornadaTxt = hoy[12]||"8h";
-  const { trabajadas, extra }=calcularExtra(hoy[3],h,horaProgObj?.entrada||null,horaProgObj?.salida||null);
-  await sClient.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:`Asistencia!F${idx+1}:M${idx+1}`, valueInputOption:'USER_ENTERED', requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),trabajadas,extra,jornadaTxt]]} });
-  await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto}`});
+  const estatus = esRetardo? `RETARDO ${minRetardo}min (Prog ${horaProg})` : `A TIEMPO Prog ${horaProg}`;
+  await sClient.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:`Asistencia!D${idx+1}:E${idx+1}`, valueInputOption:'USER_ENTERED', requestBody:{values:[[h,estatus]]} });
+  await sock.sendMessage(jid,{text:`${esRetardo?'⏰':'✅'} ${estatus} - ${nombreCompleto} en ${cercana.nombre} - ${h}`});
 
-  // --- AVISO SALIDA A GERENTES ---
- }else{
+  // --- SOLO AVISA RETARDO A GERENTES ---
+  if(esRetardo){
+    let grupoGerente = null;
+    if(cercana.id === 'COYOACAN' || cercana.id === 'HOTEL') grupoGerente = GRUPO_COYOACAN_ID;
+    else grupoGerente = GRUPO_BUCARELI_ID;
+    if(grupoGerente){
+      try{ await sock.sendMessage(grupoGerente, {text:`⏰ RETARDO ${minRetardo}min (Prog ${horaProg}) - ${nombreCompleto} en ${cercana.nombre} - ${h}`}); }catch(e){}
+    }
+  }
+
+}else{
   if(hoy[5]){
     await sock.sendMessage(jid,{text:`Salida ya registrada`});
     return
@@ -418,9 +419,8 @@ if(baseInfo){
   const jornadaTxt = hoy[12]||"8h";
   const { trabajadas, extra }=calcularExtra(hoy[3],h,horaProgObj?.entrada||null,horaProgObj?.salida||null);
   await sClient.spreadsheets.values.update({ spreadsheetId:SPREADSHEET_ID, range:`Asistencia!F${idx+1}:M${idx+1}`, valueInputOption:'USER_ENTERED', requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),trabajadas,extra,jornadaTxt]]} });
-  await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto}`});
+  await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCompleto} en ${cercana.nombre} - ${h} - Trab ${trabajadas} Extra ${extra}`});
 }
-    }catch(e){ console.error(e) }
-  })
+    }catch(e){ console.error(e) }  })
 }
 start()
