@@ -29,7 +29,6 @@ async function start(){
   const authDir = '/app/baileys_auth'
   try{
     if(!fs.existsSync(authDir)) fs.mkdirSync(authDir,{recursive:true})
-    // RESTAURACION SIN VOLUME: solo necesita creds.json (2kb)
     if(process.env.CREDS_DATA && !fs.existsSync(path.join(authDir,'creds.json'))){
       fs.writeFileSync(path.join(authDir,'creds.json'), process.env.CREDS_DATA, 'utf8')
       console.log('✅ creds.json restaurado desde CREDS_DATA')
@@ -55,15 +54,29 @@ async function start(){
   sock.ev.on('messages.upsert',async({messages})=>{
     try{
       const m=messages[0]; if(!m||m.key.fromMe) return; const jid=m.key.remoteJid; if(!jid.endsWith('@g.us')) return
-      const rawLid=m.key.participant||''; const realPn=m.key.participantPn||''; let pn=''; try{pn=await sock.signalRepository?.lidMapping?.getPNForLID(rawLid)||''}catch{}; const rawId=realPn||pn||rawLid||jid
-      let tel=(rawId||'').toString().replace(/\D/g,''); let tel10=tel.slice(-10)
+      
       const texto=m.message?.conversation||m.message?.extendedTextMessage?.text||m.message?.imageMessage?.caption||m.message?.documentMessage?.caption||''; 
       const loc=m.message?.locationMessage||m.message?.liveLocationMessage
-      const esImagen=!!(m.message?.imageMessage)
-      const tipo=getTipoGrupo(jid); if(!tipo) return
-      const filtro=await getFiltro(jid)
+
+      // 1. COMANDO ID - SIEMPRE RESPONDE, AUNQUE NO ESTE CONFIGURADO
+      if(texto.trim().toLowerCase()==='id'){
+        const tipoTmp = getTipoGrupo(jid) || 'NO_CONFIGURADO'
+        const filtroTmp = await getFiltro(jid) || 'sin filtro'
+        console.log(`ID solicitado en ${jid}`)
+        await sock.sendMessage(jid,{text:`ID: ${jid}\nTipo: ${tipoTmp}\nFiltro: ${filtroTmp}`}); 
+        return 
+      }
+
+      const rawLid=m.key.participant||''; const realPn=m.key.participantPn||''; let pn=''; try{pn=await sock.signalRepository?.lidMapping?.getPNForLID(rawLid)||''}catch{}; const rawId=realPn||pn||rawLid||jid
+      let tel=(rawId||'').toString().replace(/\D/g,''); let tel10=tel.slice(-10)
       
-      if(texto.trim().toLowerCase()==='id'){ await sock.sendMessage(jid,{text:`ID: ${jid}\nTipo: ${tipo}\nFiltro: ${filtro}`}); return }
+      const esImagen=!!(m.message?.imageMessage)
+      const tipo=getTipoGrupo(jid); 
+      if(!tipo){
+        console.log(`Grupo no configurado: ${jid} texto: ${texto.substring(0,50)}`)
+        return
+      }
+      const filtro=await getFiltro(jid)
 
       if(tipo==='REPORTES'){
         if(esImagen || /^compras/i.test(texto)){
@@ -77,6 +90,7 @@ async function start(){
 
       if(tipo==='CHECADORES'){
         if(!loc) return
+        console.log(`Ubicación recibida de ${tel10} en ${jid}`)
         await handleChecador({sock,jid,m,loc,rawLid,tel10,tel}); return
       }
 
