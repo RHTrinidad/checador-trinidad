@@ -5,7 +5,7 @@ import express from 'express'
 import fs from 'fs'
 import path from 'path'
 import P from 'pino'
-import { GRUPOS, PAQUETES, getTipoGrupo, GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, GRUPO_JUAREZ_ID, GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID } from './src/config.js'
+import { GRUPOS, PAQUETES, getTipoGrupo, GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, GRUPO_JUAREZ_ID, GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID, GRUPO_PRUEBAS_ID, GRUPO_REPORTES_TRINIDAD_ID } from './src/config.js'
 import { handleChecador, checkNoLlegaron } from './src/checador.js'
 import { handleReportes } from './src/reportes.js'
 import { handleCompras } from './src/compras.js'
@@ -17,7 +17,7 @@ app.get('/backup',(r,s)=>{ try{ const dir='/app/baileys_auth'; if(!fs.existsSync
 app.listen(process.env.PORT||3000,()=>console.log('WEB '+process.env.PORT+' OK'));
 
 async function getFiltro(jid){
-  if(GRUPOS.REPORTES.includes(jid)) return null
+  if(jid===GRUPO_PRUEBAS_ID || jid===GRUPO_REPORTES_TRINIDAD_ID) return null // PRUEBAS Y REPORTES VEN TODO
   if(jid===GRUPO_COYOACAN_ID||jid===GRUPO_CHECADOR_COYOACAN_ID) return 'coyoacan'
   if(jid===GRUPO_BUCARELI_ID||jid===GRUPO_JUAREZ_ID||jid===GRUPO_CHECADOR_BUCARELI_ID) return 'juarez'
   return null
@@ -51,11 +51,10 @@ async function start(){
       const texto=m.message?.conversation||m.message?.extendedTextMessage?.text||m.message?.imageMessage?.caption||m.message?.documentMessage?.caption||''; 
       const loc=m.message?.locationMessage||m.message?.liveLocationMessage
 
+      // ID - SOLO EL ID, NADA MAS
       if(texto.trim().toLowerCase()==='id'){
-        const tipoTmp = getTipoGrupo(jid) || 'NO_CONFIGURADO'
-        const filtroTmp = await getFiltro(jid) || 'sin filtro'
         console.log(`ID solicitado en ${jid}`)
-        await sock.sendMessage(jid,{text:`ID: ${jid}\nTipo: ${tipoTmp}\nFiltro: ${filtroTmp}`}); 
+        await sock.sendMessage(jid,{text: jid}); 
         return 
       }
 
