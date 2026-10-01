@@ -13,7 +13,7 @@ import { handleCompras } from './src/compras.js'
 const app=express(); let lastQR=null;
 app.get('/',(r,s)=>s.send('Bot OK - /qr'));
 app.get('/qr',async(r,s)=>{ if(!lastQR) return s.send('No QR aun, espera 5 seg y recarga'); const d=await QRCode.toDataURL(lastQR); s.send(`<div style="text-align:center"><h2>Escanea</h2><img src="${d}" style="width:400px"><p>Se actualiza cada 15s</p></div>`) });
-app.get('/backup',(r,s)=>{ try{ const dir='./baileys_auth'; if(!fs.existsSync(dir)) return s.json({error:'no auth'}); const files=fs.readdirSync(dir); let o={}; files.forEach(f=>{ try{o[f]=fs.readFileSync(path.join(dir,f),'utf8')}catch{}}); s.json(o)}catch(e){s.json({error:e.message})} });
+app.get('/backup',(r,s)=>{ try{ const dir='/app/baileys_auth'; if(!fs.existsSync(dir)) return s.json({error:'no auth'}); const files=fs.readdirSync(dir); let o={}; files.forEach(f=>{ try{o[f]=fs.readFileSync(path.join(dir,f),'utf8')}catch{}}); s.json(o)}catch(e){s.json({error:e.message})} });
 app.listen(process.env.PORT||3000,()=>console.log('WEB '+process.env.PORT));
 
 async function getFiltro(jid){
@@ -23,8 +23,20 @@ async function getFiltro(jid){
   return null
 }
 
+let cronInterval = null
+
 async function start(){
-  const {state,saveCreds}=await useMultiFileAuthState('/app/baileys_auth')
+  const authDir = '/app/baileys_auth'
+  try{
+    if(!fs.existsSync(authDir)) fs.mkdirSync(authDir,{recursive:true})
+    // RESTAURACION SIN VOLUME: solo necesita creds.json (2kb)
+    if(process.env.CREDS_DATA && !fs.existsSync(path.join(authDir,'creds.json'))){
+      fs.writeFileSync(path.join(authDir,'creds.json'), process.env.CREDS_DATA, 'utf8')
+      console.log('✅ creds.json restaurado desde CREDS_DATA')
+    }
+  }catch(e){ console.log('Error restaurando creds', e.message) }
+
+  const {state,saveCreds}=await useMultiFileAuthState(authDir)
   const {version}=await fetchLatestBaileysVersion()
   const sock=makeWASocket({version,auth:state,logger:P({level:'fatal'}),browser:['Trinidad Bot','Chrome','121'],getMessage:async()=>undefined})
   sock.ev.on('creds.update',saveCreds)
@@ -32,11 +44,10 @@ async function start(){
     if(qr){lastQR=qr; qrcodeTerminal.generate(qr,{small:false})}
     if(connection==='close'){ const c=lastDisconnect?.error?.output?.statusCode; if(c!==DisconnectReason.loggedOut) setTimeout(()=>start(),5000)}
     if(connection==='open'){
-      console.log('CONECTADO MODULAR + OPENAI + TOL 15min');
+      console.log('CONECTADO MODULAR + TOL 15min + SIN QR');
       lastQR=null
-      
-      // CRON: revisa cada 10 min quien no ha llegado (aviso único al día después de 20 min)
-      setInterval(()=> {
+      if(cronInterval) clearInterval(cronInterval)
+      cronInterval = setInterval(()=> {
         checkNoLlegaron(sock).catch(e=>console.log('cron error', e.message))
       }, 10 * 60 * 1000)
     }
