@@ -15,12 +15,19 @@ export const GRUPO_JUAREZ_ID = '120363410610062461@g.us'
 export const GRUPO_CHECADOR_COYOACAN_ID = '120363403668034900@g.us'
 export const GRUPO_CHECADOR_BUCARELI_ID = '120363411739089744@g.us'
 
-// --- SUCURSALES (si las tenías, deja las tuyas, estas son de respaldo) ---
+// --- SUCURSALES ---
 export const SUCURSALES = [
   { nombre: 'Coyoacan', lat: 19.346, lng: -99.16, rEnt: 150, rSal: 300 },
-  { nombre: 'Bucareli', lat: 19.43, lng: -99.15, rEnt: 150, rSal: 300 },
-  { nombre: 'Juarez', lat: 19.43, lng: -99.15, rEnt: 150, rSal: 300 },
+  { nombre: 'Hotel', lat: 19.351783, lng: -99.165471, rEnt: 150, rSal: 300 },
+  { nombre: 'Bucareli', lat: 19.431443, lng: -99.151142, rEnt: 150, rSal: 300 },
 ]
+
+// --- GRUPOS ---
+export const GRUPOS = {
+  REPORTES: [GRUPO_REPORTES_TRINIDAD_ID, GRUPO_PRUEBAS_ID],
+  GERENTES: [GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID],
+  CHECADORES: [GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID, GRUPO_CHECADOR_HOTEL_ID]
+}
 
 export const GRUPOS = {
   REPORTES: [GRUPO_REPORTES_TRINIDAD_ID, GRUPO_PRUEBAS_ID],
