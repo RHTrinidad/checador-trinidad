@@ -1,4 +1,4 @@
-// src/config.js - COMPLETO
+// src/config.js - CORREGIDO 150/150 TODO
 
 export const SPREADSHEET_ID = process.env.SPREADSHEET_ID || ''
 export const SPREADSHEET_COMPRAS_ID = process.env.SPREADSHEET_COMPRAS_ID || SPREADSHEET_ID
@@ -13,8 +13,8 @@ export const GRUPO_CHECADOR_COYOACAN_ID = '120363403668034900@g.us'
 export const GRUPO_CHECADOR_BUCARELI_ID = '120363411739089744@g.us'
 
 export const SUCURSALES = [
-  { nombre: 'Coyoacan', lat: 19.346000, lng: -99.160000, rEnt: 150, rSal: 300 },
-  { nombre: 'Hotel', lat: 19.351783, lng: -99.165471, rEnt: 150, rSal: 300 },
+  { nombre: 'Coyoacan', lat: 19.346, lng: -99.16, rEnt: 150, rSal: 150 },
+  { nombre: 'Hotel', lat: 19.351783, lng: -99.165471, rEnt: 150, rSal: 150 },
   { nombre: 'Bucareli', lat: 19.431443, lng: -99.151142, rEnt: 150, rSal: 150 },
 ]
 
