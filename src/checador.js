@@ -1,6 +1,13 @@
 import { SUCURSALES, GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, SPREADSHEET_ID } from './config.js'
-import { distM, fechaLaboral, horaMX, minutos, normaliza, calcularHorasTrabajadas, calcularExtra } from './utils.js'
+import { distM, fechaLaboral, horaMX, minutos, normaliza, calcularHorasTrabajadas, calcularExtra, parseHorarioRango } from './utils.js'
 import { getRows, sheetsClient, getHorarioBaseMap } from './sheets.js'
+
+const TOLERANCIA_MIN = 15
+const AVISO_FALTA_MIN = 20
+
+// memoria para que solo avise 1 vez al dia por persona
+let avisosHoy = new Set()
+let fechaAvisos = ''
 
 export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
   const lat=loc.degreesLatitude,lng=loc.degreesLongitude; let cercana=null,dMin=Infinity;
@@ -12,14 +19,35 @@ export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
   const fLab=fechaLaboral(); const asis=await getRows('Asistencia!A:M'); const idx=asis.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10F&&r[2]===fLab); const hoy=idx>-1?asis[idx]:null;
   const sClient=await sheetsClient(); const baseMap=await getHorarioBaseMap(); const base=baseMap[tel10F]||baseMap[normaliza(nombre).split(' ')[0]]||null;
   let estatus='A TIEMPO', hObj=null, esRet=false, minRet=0, hProg='';
-  if(base){ const fe=new Date(fLab+'T12:00:00'); const dn=fe.getDay(); if(base.descansos.has(dn)) estatus='DESCANSO'; else if(base.horas[dn]){ hObj=base.horas[dn]; hProg=hObj.entrada||''; if(hObj.entrada!=='LIBRE'){ const dif=minutos(horaMX())-minutos(hObj.entrada); if(dif>1){estatus=`RETARDO ${dif}min (Prog ${hObj.entrada})`; esRet=true; minRet=dif} else estatus=`A TIEMPO Prog ${hObj.entrada}`} } }
+  if(base){
+    const fe=new Date(fLab+'T12:00:00'); const dn=fe.getDay();
+    if(base.descansos.has(dn)) estatus='DESCANSO';
+    else if(base.horas[dn]){
+      hObj=base.horas[dn]; hProg=hObj.entrada||'';
+      if(hObj.entrada!=='LIBRE' && hObj.entrada){
+        const dif=minutos(horaMX())-minutos(hObj.entrada);
+        if(dif > TOLERANCIA_MIN){
+          estatus=`RETARDO ${dif}min (Prog ${hObj.entrada})`;
+          esRet=true;
+          minRet=dif
+        } else {
+          estatus=`A TIEMPO (Prog ${hObj.entrada})`
+        }
+      }
+    }
+  }
   try{
     if(!hoy||!hoy[3]){
       if(dMin>cercana.rEnt){ await sock.sendMessage(jid,{text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}`},{quoted:m}); return }
       const h=horaMX(); const jTxt=hObj?`${hObj.entrada}${hObj.salida?` - ${hObj.salida}`:''}`:"8h"; const row=[tel10F,nombre,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',calcularHorasTrabajadas(h,""),"0",jTxt];
       if(idx===-1) await sClient.spreadsheets.values.append({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A:M',valueInputOption:'USER_ENTERED',requestBody:{values:[row]}}); else await sClient.spreadsheets.values.update({spreadsheetId:SPREADSHEET_ID,range:`Asistencia!A${idx+1}:M${idx+1}`,valueInputOption:'USER_ENTERED',requestBody:{values:[row]}});
+
+      // Mensaje en su grupo checador (a tiempo o retardo)
       await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombre} en ${cercana.nombre} - ${h}`});
-      if(esRet){ const g=(cercana.id==='COYOACAN'||cercana.id==='HOTEL')?GRUPO_COYOACAN_ID:GRUPO_BUCARELI_ID; if(g) try{ await sock.sendMessage(g,{text:`⏰ RETARDO ${minRet}min (Prog ${hProg}) - ${nombre} en ${cercana.nombre} - ${h}`}) }catch{} }
+
+      // YA NO avisa retardo al momento a gerentes, solo se registra.
+      // El aviso de NO LLEGADA lo hace el cron de abajo.
+
     }else{
       if(hoy[5]){ await sock.sendMessage(jid,{text:`Salida ya registrada`}); return }
       if(dMin>cercana.rSal){ await sock.sendMessage(jid,{text:`No puedes checar salida a ${Math.round(dMin)}m`},{quoted:m}); return }
@@ -28,4 +56,46 @@ export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
       await sock.sendMessage(jid,{text:`✅ Salida - ${nombre} en ${cercana.nombre} - ${h} - Trab ${trabajadas} Extra ${extra}`});
     }
   }catch(e){ console.error(e) }
+}
+
+// Esta función la llamas cada 10 min desde index.js
+export async function checkNoLlegaron(sock){
+  const hoy = fechaLaboral()
+  if(fechaAvisos!== hoy){ avisosHoy.clear(); fechaAvisos = hoy }
+
+  const ahoraMin = minutos(horaMX())
+  const baseRows = await getRows('Horario_Base!A2:K')
+  const asisRows = await getRows('Asistencia!A2:M')
+  const diaNum = new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).getDay()
+
+  for(const r of baseRows){
+    const tel = (r[0]||'').replace(/\D/g,'').slice(-10)
+    if(!tel) continue
+    const key = `${hoy}_${tel}`
+    if(avisosHoy.has(key)) continue
+
+    const mapa = {1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
+    const v = (mapa[diaNum]||'').toString().trim()
+    const parsed = parseHorarioRango(v)
+    if(!parsed || parsed.entrada === 'LIBRE' ||!parsed.entrada) continue
+
+    const dif = ahoraMin - minutos(parsed.entrada)
+    if(dif >= AVISO_FALTA_MIN){
+      const registro = asisRows.find(a => (a[0]||'').replace(/\D/g,'').slice(-10)===tel && a[2]===hoy && a[3])
+      if(!registro){
+        avisosHoy.add(key)
+        const nombre = r[1]||tel
+        const sucId = (r[2]||'').toLowerCase()
+        let grupoAviso = null
+        if(sucId.includes('coyo') || sucId.includes('hotel') || sucId.includes('trinidad')) grupoAviso = GRUPO_COYOACAN_ID
+        else grupoAviso = GRUPO_BUCARELI_ID
+
+        if(grupoAviso){
+          try{
+            await sock.sendMessage(grupoAviso, {text: `⚠️ NO HA LLEGADO - ${nombre} - Prog ${parsed.entrada} - ${dif}min tarde - [${r[2]}]`})
+          }catch{}
+        }
+      }
+    }
+  }
 }
