@@ -5,7 +5,7 @@ import express from 'express'
 import fs from 'fs'
 import path from 'path'
 import P from 'pino'
-import { GRUPOS, PAQUETES, getTipoGrupo, GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, GRUPO_JUAREZ_ID, GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID, GRUPO_PRUEBAS_ID, GRUPO_REPORTES_TRINIDAD_ID } from './src/config.js'
+import { GRUPOS, PAQUETES, getTipoGrupo, GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID, GRUPO_PRUEBAS_ID, GRUPO_REPORTES_TRINIDAD_ID } from './src/config.js'
 import { handleChecador, checkNoLlegaron } from './src/checador.js'
 import { handleReportes } from './src/reportes.js'
 import { handleCompras } from './src/compras.js'
@@ -19,7 +19,7 @@ app.listen(process.env.PORT||3000,()=>console.log('WEB '+process.env.PORT+' OK')
 async function getFiltro(jid){
   if(jid===GRUPO_PRUEBAS_ID || jid===GRUPO_REPORTES_TRINIDAD_ID) return null // PRUEBAS Y REPORTES VEN TODO
   if(jid===GRUPO_COYOACAN_ID||jid===GRUPO_CHECADOR_COYOACAN_ID) return 'coyoacan'
-  if(jid===GRUPO_BUCARELI_ID||jid===GRUPO_JUAREZ_ID||jid===GRUPO_CHECADOR_BUCARELI_ID) return 'juarez'
+  if(jid===GRUPO_BUCARELI_ID||jid===GRUPO_CHECADOR_BUCARELI_ID) return 'juarez'
   return null
 }
 
