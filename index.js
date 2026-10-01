@@ -6,7 +6,7 @@ import fs from 'fs'
 import path from 'path'
 import P from 'pino'
 import { GRUPOS, PAQUETES, getTipoGrupo, GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, GRUPO_JUAREZ_ID, GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID } from './src/config.js'
-import { handleChecador } from './src/checador.js'
+import { handleChecador, checkNoLlegaron } from './src/checador.js'
 import { handleReportes } from './src/reportes.js'
 import { handleCompras } from './src/compras.js'
 
@@ -28,7 +28,19 @@ async function start(){
   const {version}=await fetchLatestBaileysVersion()
   const sock=makeWASocket({version,auth:state,logger:P({level:'fatal'}),browser:['Trinidad Bot','Chrome','121'],getMessage:async()=>undefined})
   sock.ev.on('creds.update',saveCreds)
-  sock.ev.on('connection.update',async({connection,lastDisconnect,qr})=>{ if(qr){lastQR=qr; qrcodeTerminal.generate(qr,{small:false})} if(connection==='close'){ const c=lastDisconnect?.error?.output?.statusCode; if(c!==DisconnectReason.loggedOut) setTimeout(()=>start(),5000)} if(connection==='open'){console.log('CONECTADO MODULAR + OPENAI'); lastQR=null} })
+  sock.ev.on('connection.update',async({connection,lastDisconnect,qr})=>{
+    if(qr){lastQR=qr; qrcodeTerminal.generate(qr,{small:false})}
+    if(connection==='close'){ const c=lastDisconnect?.error?.output?.statusCode; if(c!==DisconnectReason.loggedOut) setTimeout(()=>start(),5000)}
+    if(connection==='open'){
+      console.log('CONECTADO MODULAR + OPENAI + TOL 15min');
+      lastQR=null
+      
+      // CRON: revisa cada 10 min quien no ha llegado (aviso único al día después de 20 min)
+      setInterval(()=> {
+        checkNoLlegaron(sock).catch(e=>console.log('cron error', e.message))
+      }, 10 * 60 * 1000)
+    }
+  })
   sock.ev.on('messages.upsert',async({messages})=>{
     try{
       const m=messages[0]; if(!m||m.key.fromMe) return; const jid=m.key.remoteJid; if(!jid.endsWith('@g.us')) return
@@ -42,7 +54,6 @@ async function start(){
       
       if(texto.trim().toLowerCase()==='id'){ await sock.sendMessage(jid,{text:`ID: ${jid}\nTipo: ${tipo}\nFiltro: ${filtro}`}); return }
 
-      // REPORTES = compras + reportes
       if(tipo==='REPORTES'){
         if(esImagen || /^compras/i.test(texto)){
           const ok=await handleCompras({sock,jid,m,texto,esImagen}); if(ok) return
@@ -53,13 +64,11 @@ async function start(){
         return
       }
 
-      // CHECADORES = solo checador blindado
       if(tipo==='CHECADORES'){
         if(!loc) return
         await handleChecador({sock,jid,m,loc,rawLid,tel10,tel}); return
       }
 
-      // GERENTES = solo reportes
       if(tipo==='GERENTES'){
         if(loc) return
         if(!PAQUETES.REPORTES_PARA_GERENTES.test(texto)) return
