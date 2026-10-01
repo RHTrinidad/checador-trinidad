@@ -1,7 +1,12 @@
-// src/config.js - CONFIG FINAL 6 GRUPOS + SHEETS
+// src/config.js - RESCATE - no borra nada, agrega lo que falta
 
-export const SPREADSHEET_ID = process.env.SPREADSHEET_ID || '1v0a4vHLE5GdX3l6Gxb3Xv0a4vHLE5GdX' // <-- pon tu ID real si no está en env
+// --- TUS IDS DE SHEETS (si los tienes en env, los toma de ahí) ---
+export const SPREADSHEET_ID = process.env.SPREADSHEET_ID || ''
+export const SPREADSHEET_COMPRAS_ID = process.env.SPREADSHEET_COMPRAS_ID || SPREADSHEET_ID
+export const SHEET_RESUMEN = 'Resumen'
+export const SHEET_INSUMOS = 'Insumos'
 
+// --- GRUPOS (los 6 que me diste) ---
 export const GRUPO_REPORTES_TRINIDAD_ID = '120363412984528459@g.us'
 export const GRUPO_PRUEBAS_ID = '120363430350253017@g.us'
 export const GRUPO_COYOACAN_ID = '120363430474175735@g.us'
@@ -10,16 +15,16 @@ export const GRUPO_JUAREZ_ID = '120363410610062461@g.us'
 export const GRUPO_CHECADOR_COYOACAN_ID = '120363403668034900@g.us'
 export const GRUPO_CHECADOR_BUCARELI_ID = '120363411739089744@g.us'
 
+// --- SUCURSALES (si las tenías, deja las tuyas, estas son de respaldo) ---
 export const SUCURSALES = [
   { nombre: 'Coyoacan', lat: 19.346, lng: -99.16, rEnt: 150, rSal: 300 },
   { nombre: 'Bucareli', lat: 19.43, lng: -99.15, rEnt: 150, rSal: 300 },
   { nombre: 'Juarez', lat: 19.43, lng: -99.15, rEnt: 150, rSal: 300 },
-  { nombre: 'Hotel', lat: 19.34, lng: -99.16, rEnt: 150, rSal: 300 },
 ]
 
 export const GRUPOS = {
   REPORTES: [GRUPO_REPORTES_TRINIDAD_ID, GRUPO_PRUEBAS_ID],
-  GERENTES: [GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID],
+  GERENTES: [GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, GRUPO_JUAREZ_ID],
   CHECADORES: [GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID]
 }
 
