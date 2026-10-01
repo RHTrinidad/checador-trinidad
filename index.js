@@ -10,16 +10,19 @@ import { handleChecador, checkNoLlegaron } from './src/checador.js'
 import { handleReportes } from './src/reportes.js'
 import { handleCompras } from './src/compras.js'
 
-const app=express(); let lastQR=null;
+const app=express(); 
+app.use(express.json({limit:'20mb'}));
+let lastQR=null;
 app.get('/',(r,s)=>s.send('Bot OK - /qr'));
 app.get('/qr',async(r,s)=>{ if(!lastQR) return s.send('No QR aun, espera 5 seg y recarga'); const d=await QRCode.toDataURL(lastQR); s.send(`<div style="text-align:center"><h2>Escanea</h2><img src="${d}" style="width:400px"><p>Se actualiza cada 15s</p></div>`) });
-app.get('/backup',(r,s)=>{ try{ const dir='/app/baileys_auth'; if(!fs.existsSync(dir)) return s.json({error:'no auth'}); const files=fs.readdirSync(dir); let o={}; files.forEach(f=>{ try{o[f]=fs.readFileSync(path.join(dir,f),'utf8')}catch{}}); s.json(o)}catch(e){s.json({error:e.message})} });
+app.get('/backup',(r,s)=>{ try{ const dir='/app/baileys_auth'; if(!fs.existsSync(dir)) return s.json({error:'no auth'}); const files=fs.readdirSync(dir); if(files.length===0) return s.json({error:'auth vacio - escanea QR'}); let o={}; files.forEach(f=>{ try{o[f]=fs.readFileSync(path.join(dir,f),'utf8')}catch{}}); s.json(o)}catch(e){s.json({error:e.message})} });
+app.post('/restore',(r,s)=>{ try{ const dir='/app/baileys_auth'; if(!fs.existsSync(dir)) fs.mkdirSync(dir,{recursive:true}); const data=r.body; const payload=data.data?data.data:data; let c=0; for(const [f,v] of Object.entries(payload)){ if(f==='dir'||f==='files') continue; if(typeof v==='string' && v.length>10){ fs.writeFileSync(path.join(dir,f),v,'utf8'); c++; } } s.json({ok:true,restaurados:c}); }catch(e){s.json({error:e.message})} });
 app.listen(process.env.PORT||3000,()=>console.log('WEB '+process.env.PORT+' OK'));
 
 async function getFiltro(jid){
-  if(jid===GRUPO_PRUEBAS_ID || jid===GRUPO_REPORTES_TRINIDAD_ID) return null // PRUEBAS Y REPORTES VEN TODO
+  if(jid===GRUPO_PRUEBAS_ID || jid===GRUPO_REPORTES_TRINIDAD_ID) return null
   if(jid===GRUPO_COYOACAN_ID||jid===GRUPO_CHECADOR_COYOACAN_ID) return 'coyoacan'
-  if(jid===GRUPO_BUCARELI_ID||jid===GRUPO_CHECADOR_BUCARELI_ID) return 'juarez'
+  if(jid===GRUPO_BUCARELI_ID||jid===GRUPO_CHECADOR_BUCARELI_ID) return 'bucareli'
   return null
 }
 
@@ -50,14 +53,11 @@ async function start(){
       const m=messages[0]; if(!m||m.key.fromMe) return; const jid=m.key.remoteJid; if(!jid.endsWith('@g.us')) return
       const texto=m.message?.conversation||m.message?.extendedTextMessage?.text||m.message?.imageMessage?.caption||m.message?.documentMessage?.caption||''; 
       const loc=m.message?.locationMessage||m.message?.liveLocationMessage
-
-      // ID - SOLO EL ID, NADA MAS
       if(texto.trim().toLowerCase()==='id'){
         console.log(`ID solicitado en ${jid}`)
         await sock.sendMessage(jid,{text: jid}); 
         return 
       }
-
       const rawLid=m.key.participant||''; const realPn=m.key.participantPn||''; let pn=''; try{pn=await sock.signalRepository?.lidMapping?.getPNForLID(rawLid)||''}catch{}; const rawId=realPn||pn||rawLid||jid
       let tel=(rawId||'').toString().replace(/\D/g,''); let tel10=tel.slice(-10)
       const esImagen=!!(m.message?.imageMessage)
@@ -67,7 +67,6 @@ async function start(){
         return
       }
       const filtro=await getFiltro(jid)
-
       if(tipo==='REPORTES'){
         if(esImagen || /^compras/i.test(texto)){
           const ok=await handleCompras({sock,jid,m,texto,esImagen}); if(ok) return
