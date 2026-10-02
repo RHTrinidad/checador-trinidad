@@ -15,7 +15,7 @@ export const GRUPO_CHECADOR_BUCARELI_ID = '120363411739089744@g.us'
 
 // --- SECCION SUCURSALES Y COORDENADAS ---
 export const SUCURSALES = [
-  { nombre: 'Coyoacan', lat: 19.346, lng: -99.16, rEnt: 150, rSal: 150 },
+  { nombre: 'Coyoacan', lat: 19.352525, lng: -99.161817, rEnt: 150, rSal: 150 },
   { nombre: 'Hotel', lat: 19.351783, lng: -99.165471, rEnt: 150, rSal: 150 },
   { nombre: 'Bucareli', lat: 19.431443, lng: -99.151142, rEnt: 150, rSal: 150 },
 ]
