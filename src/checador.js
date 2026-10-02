@@ -1,4 +1,4 @@
-import { SUCURSALES, GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID, SPREADSHEET_ID } from './config.js' // <- FIX 1: importar checadores, no gerentes
+import { SUCURSALES, GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID, SPREADSHEET_ID } from './config.js'
 import { distM, fechaLaboral, horaMX, minutos, normaliza, calcularHorasTrabajadas, calcularExtra, parseHorarioRango } from './utils.js'
 import { getRows, sheetsClient, getHorarioBaseMap } from './sheets.js'
 
@@ -75,8 +75,8 @@ export async function checkNoLlegaron(sock){
         const nombre = r[1]||tel
         const sucId = (r[2]||'').toLowerCase()
         let grupoAviso = null
-        if(sucId.includes('coyo') || sucId.includes('hotel') || sucId.includes('trinidad')) grupoAviso = GRUPO_CHECADOR_COYOACAN_ID // <- FIX 2
-        else grupoAviso = GRUPO_CHECADOR_BUCARELI_ID // <- FIX 3
+        if(sucId.includes('coyo') || sucId.includes('hotel') || sucId.includes('trinidad')) grupoAviso = GRUPO_CHECADOR_COYOACAN_ID
+        else grupoAviso = GRUPO_CHECADOR_BUCARELI_ID
         if(grupoAviso){
           try{
             await sock.sendMessage(grupoAviso, {text: `⚠️ NO HA LLEGADO - ${nombre} - Prog ${parsed.entrada} - ${dif}min tarde - [${r[2]}]`})
