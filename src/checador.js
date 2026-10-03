@@ -11,8 +11,7 @@ import {
   horaMX,
   minutos,
   calcularHorasTrabajadas,
-  calcularExtra,
-  parseHorarioRango
+  calcularExtra
 } from './utils.js'
 
 import {
@@ -151,7 +150,7 @@ async function identificarEmpleado({tel10,rawLid,m}){
   const emp=datosEmpleado(resultado)
 
   if(emp){
-    if(rawLid && emp.lid!==rawLid){
+    if(rawLid&&emp.lid!==rawLid){
       await guardarLidEmpleado(emp.rowIndex,rawLid)
       emp.lid=rawLid
     }
@@ -186,6 +185,11 @@ export async function handleChecador({
     }
   }
 
+  if(!cercana){
+    await responder(sock,jid,'❌ No se pudo determinar la sucursal.')
+    return
+  }
+
   const fecha=fechaLaboral()
   const ahora=horaMX()
   const emp=await identificarEmpleado({tel10,rawLid,m})
@@ -204,8 +208,8 @@ export async function handleChecador({
     const nombreRow=(r[1]||'').toString().trim().toLowerCase()
 
     if(
-      (telefono10 && telRow===telefono10) ||
-      (nombreRow && nombreRow===nombre.toLowerCase())
+      (telefono10&&telRow===telefono10)||
+      (nombreRow&&nombreRow===nombre.toLowerCase())
     ){
       horarioEmp=r
       break
@@ -231,8 +235,23 @@ export async function handleChecador({
   )
 
   if(descanso){
-    await responder(sock,jid,
+    await responder(
+      sock,
+      jid,
       `🏖️ *${nombre}*\n\nHoy tienes descanso según tu horario.`
+    )
+    return
+  }
+
+  const radio=tipoRegistro==='ENTRADA'
+    ? cercana.rEnt
+    : cercana.rSal
+
+  if(dMin>radio){
+    await responder(
+      sock,
+      jid,
+      `❌ Fuera del rango de ${cercana.nombre} (${Math.round(dMin)} m / máximo ${radio} m)`
     )
     return
   }
@@ -243,7 +262,7 @@ export async function handleChecador({
       hora:ahora,
       telefono:telefono10,
       nombre,
-      sucursal:cercana?.nombre||'',
+      sucursal:cercana.nombre,
       distancia:dMin,
       programada:horaEntrada,
       emp,
@@ -258,7 +277,7 @@ export async function handleChecador({
     hora:ahora,
     telefono:telefono10,
     nombre,
-    sucursal:cercana?.nombre||'',
+    sucursal:cercana.nombre,
     distancia:dMin,
     programada:horaSalida,
     emp,
@@ -276,13 +295,17 @@ async function determinarTipoRegistro(tel,fecha){
     for(let i=1;i<rows.length;i++){
       const r=rows[i]
 
-      const fechaRow=(r[0]||'').toString().trim()
-      const telRow=(r[1]||'').toString().replace(/\D/g,'').slice(-10)
+      const fechaRow=(r[2]||'').toString().trim()
+      const telRow=(r[0]||'').toString().replace(/\D/g,'').slice(-10)
       const tipo=(r[4]||'').toString().trim().toUpperCase()
 
-      if(fechaRow!==fecha || telRow!==tel)continue
+      if(fechaRow!==fecha||telRow!==tel)continue
 
-      if(tipo.includes('ENTRADA')||tipo.includes('A TIEMPO')||tipo.includes('RETARDO')){
+      if(
+        tipo.includes('ENTRADA')||
+        tipo.includes('A TIEMPO')||
+        tipo.includes('RETARDO')
+      ){
         entrada=true
       }
 
@@ -320,9 +343,14 @@ async function registrarEntrada({
     let minutosTarde=0
 
     if(programada){
-      minutosTarde=minutos(hora,programada)
+      const entradaMin=minutos(hora)
+      const programadaMin=minutos(programada)
+      const diferencia=entradaMin-programadaMin
 
-      if(minutosTarde>0)estado='RETARDO'
+      if(diferencia>TOLERANCIA_MIN){
+        minutosTarde=diferencia-TOLERANCIA_MIN
+        estado='RETARDO'
+      }
     }
 
     await client.spreadsheets.values.append({
@@ -346,18 +374,14 @@ async function registrarEntrada({
       }
     })
 
-    await responder(
-      sock,
-      jid,
-      `✅ *ENTRADA REGISTRADA*\n\n`+
-      `👤 ${nombre}\n`+
-      `📅 ${fecha}\n`+
-      `🕐 ${hora}\n`+
-      `📍 ${sucursal}\n`+
-      `📏 ${Math.round(distancia)} m\n`+
-      `📋 ${estado}`+
-      (programada?`\n⏰ Prog: ${programada}`:'')
-    )
+    const icono=estado==='RETARDO'?'⚠️':'✅'
+
+    const mensaje=
+      `${icono} ${estado}`+
+      (estado==='RETARDO'?` ${minutosTarde} min`:'')+
+      ` (Prog ${programada||'--'}) - ${nombre} en ${sucursal||'--'} - ${hora}`
+
+    await responder(sock,jid,mensaje)
 
     return true
   }catch(e){
@@ -388,13 +412,12 @@ async function registrarSalida({
   try{
     const rows=await getRows('Asistencia!A:K')
     let entrada=null
-    let rowIndex=-1
 
     for(let i=rows.length-1;i>=1;i--){
       const r=rows[i]
 
-      const fechaRow=(r[0]||'').toString().trim()
-      const telRow=(r[1]||'').toString().replace(/\D/g,'').slice(-10)
+      const fechaRow=(r[2]||'').toString().trim()
+      const telRow=(r[0]||'').toString().replace(/\D/g,'').slice(-10)
       const tipo=(r[4]||'').toString().trim().toUpperCase()
 
       if(
@@ -403,7 +426,6 @@ async function registrarSalida({
         !tipo.includes('SALIDA')
       ){
         entrada=r
-        rowIndex=i+1
         break
       }
     }
@@ -523,7 +545,6 @@ export async function cerrarSalidasPendientes(){
   try{
     const fecha=fechaLaboral()
     const rows=await getRows('Asistencia!A:K')
-
     const pendientes=[]
 
     for(let i=1;i<rows.length;i++){
@@ -552,9 +573,6 @@ export async function cerrarSalidasPendientes(){
     if(!pendientes.length)return
 
     const ahora=horaMX()
-    const horaActual=parseHorarioRango(`00:00-${ahora}`)
-
-    if(!horaActual)return
 
     for(const p of pendientes){
       const horaEntrada=(p.r[3]||'').toString().trim()
@@ -562,7 +580,9 @@ export async function cerrarSalidasPendientes(){
 
       if(!horas)continue
 
-      const num=parseFloat(horas)||0
+      const partes=horas.split(':')
+      const num=(parseInt(partes[0])||0)+(parseInt(partes[1]||0)/60)
+
       if(num<CIERRE_AUTO_HORAS)continue
 
       const client=await sheetsClient()
@@ -597,11 +617,10 @@ export async function checkNoLlegaron(sock){
   try{
     const fecha=fechaLaboral()
     const ahora=horaMX()
-    const horaAhora=minutos(ahora,'00:00')
+    const horaAhora=minutos(ahora)
 
     const horarioRows=await getRows('Horario_Base!A2:K')
     const asistenciaRows=await getRows('Asistencia!A:K')
-
     const dia=diaMexico()
 
     for(const r of horarioRows){
@@ -616,7 +635,7 @@ export async function checkNoLlegaron(sock){
       if(!partes)continue
 
       const programada=partes[1]
-      const minProgramada=minutos(programada,'00:00')
+      const minProgramada=minutos(programada)
 
       if(horaAhora-minProgramada<AVISO_FALTA_MIN)continue
 
@@ -645,7 +664,6 @@ export async function checkNoLlegaron(sock){
       if(yaAviso)continue
 
       const minutosTarde=horaAhora-minProgramada
-
       let grupoAviso=null
 
       const sucId=sucursal
