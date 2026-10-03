@@ -1,119 +1,158 @@
-import { SUCURSALES, GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID, SPREADSHEET_ID } from './config.js'
+import { SUCURSALES, GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID, GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, SPREADSHEET_ID } from './config.js'
 import { distM, fechaLaboral, horaMX, minutos, normaliza, calcularHorasTrabajadas, calcularExtra, parseHorarioRango } from './utils.js'
 import { getRows, sheetsClient, getHorarioBaseMap } from './sheets.js'
 
-const TOLERANCIA_MIN = 15
-const AVISO_FALTA_MIN = 20
-const AVISO_RETARDO_60_MIN = 60
-const FECHA_CORTE_RETARDOS = '2026-10-02'
-const HOJA_ALERTAS_RETARDOS = 'Alertas_Retardos'
+const TOLERANCIA_MIN=15
+const AVISO_FALTA_MIN=20
+const AVISO_RETARDO_60_MIN=60
+const FECHA_CORTE_RETARDOS='2026-10-02'
+const HOJA_ALERTAS_RETARDOS='Alertas_Retardos'
+const HOJA_AVISOS='Avisos'
 
-let avisosHoy = new Set()
-let fechaAvisos = ''
-let avisos60Hoy = new Set()
-let fechaAvisos60 = ''
+const normalizaTel=v=>(v||'').toString().replace(/\D/g,'').slice(-10)
 
-// Determina el grupo de gerentes según la sucursal asignada al empleado.
 function grupoGerentesPorSucursal(sucursal){
-  const x = normaliza(sucursal)
-  if(x.includes('coyo') || x.includes('hotel') || x.includes('trinidad')) return GRUPO_COYOACAN_ID
-  if(x.includes('bucareli') || x.includes('juarez')) return GRUPO_BUCARELI_ID
+  const x=normaliza(sucursal)
+  if(x.includes('coyo')||x.includes('hotel')||x.includes('trinidad'))return GRUPO_COYOACAN_ID
+  if(x.includes('juarez')||x.includes('bucareli'))return GRUPO_BUCARELI_ID
   return null
 }
 
-// Crea la hoja de control para conservar los avisos de 3 retardos aunque Railway reinicie.
-async function asegurarHojaAlertasRetardos(){
-  const client = await sheetsClient()
-  const meta = await client.spreadsheets.get({spreadsheetId:SPREADSHEET_ID})
-  const existe = (meta.data.sheets||[]).some(s=>s.properties?.title===HOJA_ALERTAS_RETARDOS)
-  if(!existe){
-    await client.spreadsheets.batchUpdate({
-      spreadsheetId:SPREADSHEET_ID,
-      requestBody:{requests:[{addSheet:{properties:{title:HOJA_ALERTAS_RETARDOS}}}]}
-    })
-    await client.spreadsheets.values.update({
-      spreadsheetId:SPREADSHEET_ID,
-      range:`${HOJA_ALERTAS_RETARDOS}!A1:E1`,
-      valueInputOption:'USER_ENTERED',
-      requestBody:{values:[['FechaAviso','Telefono','Nombre','Retardos','Detalle']]}
-    })
-  }
+function horarioLaboralMin(h){
+  const m=minutos(h)
+  return m<300?m+1440:m
 }
 
-// Convierte una fecha laboral en número de día para poder calcular días hábiles.
-function fechaObj(s){
-  const d = new Date(`${s}T12:00:00`)
-  return isNaN(d) ? null : d
+function calcularRetardo(hEntrada,hProg){
+  if(!hEntrada||!hProg||hProg==='LIBRE')return 0
+  return horarioLaboralMin(hEntrada)-horarioLaboralMin(hProg)
 }
 
-function diasHabilesEntre(inicio,fin){
-  const a=fechaObj(inicio), b=fechaObj(fin)
-  if(!a||!b) return 0
-  let n=0
-  for(let d=new Date(a);d<=b;d.setDate(d.getDate()+1)){
-    const dia=d.getDay()
-    if(dia!==0&&dia!==6) n++
-  }
-  return n
-}
-
-function esDentroDe30DiasHabiles(fecha,hoy){
-  const a=fechaObj(fecha), b=fechaObj(hoy)
-  if(!a||!b||a>b) return false
-  let n=0
-  for(let d=new Date(a);d<=b;d.setDate(d.getDate()+1)){
-    const dia=d.getDay()
-    if(dia!==0&&dia!==6) n++
-  }
-  return n<=30
-}
-
-// Revisa los retardos acumulados y genera el aviso al llegar a 3.
-async function revisarTresRetardos(sock,tel,nombre,sucursal){
-  if(!tel) return
-  const hoy=fechaLaboral()
-  if(hoy<FECHA_CORTE_RETARDOS) return
-
-  const rows=await getRows('Asistencia!A2:M')
-  const retardos=rows.filter(r=>{
-    const t=(r[0]||'').replace(/\D/g,'').slice(-10)
-    const f=(r[2]||'').toString()
-    const m=(r[4]||'').toString().match(/RETARDO\s+(\d+)\s*min/i)
-    return t===tel&&f>=FECHA_CORTE_RETARDOS&&f<=hoy&&esDentroDe30DiasHabiles(f,hoy)&&m
-  }).map(r=>({fecha:r[2],min:Number((r[4].toString().match(/RETARDO\s+(\d+)\s*min/i)||[])[1]||0)}))
-
-  if(retardos.length<3) return
-
-  const alertaRows=await getRows(`${HOJA_ALERTAS_RETARDOS}!A2:E`)
-  const anteriores=alertaRows.filter(r=>(r[1]||'').replace(/\D/g,'').slice(-10)===tel)
-  const ultima=anteriores.length?anteriores[anteriores.length-1]:null
-  const fechaUltima=ultima?.[0]||''
-
-  // El último aviso funciona como punto de reinicio: solo cuentan retardos posteriores.
-  const nuevos=fechaUltima?retardos.filter(x=>x.fecha>fechaUltima):retardos
-  if(nuevos.length<3) return
-
-  const grupo=grupoGerentesPorSucursal(sucursal)
-  if(!grupo) return
-
-  const detalle=nuevos.slice(0,3).map(x=>`${x.fecha}: ${x.min}min`).join(' | ')
+async function asegurarHojaAvisos(sClient){
   try{
-    await sock.sendMessage(grupo,{text:`⚠️ 3 RETARDOS - ${nombre}\nSe acumularon 3 retardos dentro de los últimos 30 días hábiles.\n${detalle}\n[${sucursal}]`})
-    const client=await sheetsClient()
-    await client.spreadsheets.values.append({
-      spreadsheetId:SPREADSHEET_ID,
-      range:`${HOJA_ALERTAS_RETARDOS}!A:E`,
-      valueInputOption:'USER_ENTERED',
-      requestBody:{values:[[hoy,tel,nombre,'3',detalle]]}
+    await sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:`${HOJA_AVISOS}!A:D`})
+  }catch(e){
+    try{
+      await sClient.spreadsheets.batchUpdate({
+        spreadsheetId:SPREADSHEET_ID,
+        requestBody:{requests:[{addSheet:{properties:{title:HOJA_AVISOS}}}]}
+      })
+      await sClient.spreadsheets.values.update({
+        spreadsheetId:SPREADSHEET_ID,
+        range:`${HOJA_AVISOS}!A1:D1`,
+        valueInputOption:'USER_ENTERED',
+        requestBody:{values:[['Tel','Fecha','HoraAviso','Nombre Corto']]}
+      })
+    }catch(err){
+      if(!String(err.message||'').toLowerCase().includes('already exists'))throw err
+    }
+  }
+}
+
+async function yaAvisadoNoLlegada(sClient,tel,fecha){
+  await asegurarHojaAvisos(sClient)
+  const r=await sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:`${HOJA_AVISOS}!A:D`})
+  const rows=r.data.values||[]
+  const tel10=normalizaTel(tel)
+  return rows.slice(1).some(x=>normalizaTel(x[0])===tel10&&String(x[1]||'').trim()===fecha)
+}
+
+async function registrarAvisoNoLlegada(sClient,tel,fecha,hora,nombreCorto){
+  await asegurarHojaAvisos(sClient)
+  await sClient.spreadsheets.values.append({
+    spreadsheetId:SPREADSHEET_ID,
+    range:`${HOJA_AVISOS}!A:D`,
+    valueInputOption:'USER_ENTERED',
+    requestBody:{values:[[normalizaTel(tel),fecha,hora,nombreCorto||'']]}
+  })
+}
+
+async function asegurarHojaAlertasRetardos(sClient){
+  try{
+    await sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:`${HOJA_ALERTAS_RETARDOS}!A:E`})
+  }catch(e){
+    try{
+      await sClient.spreadsheets.batchUpdate({
+        spreadsheetId:SPREADSHEET_ID,
+        requestBody:{requests:[{addSheet:{properties:{title:HOJA_ALERTAS_RETARDOS}}}]}
+      })
+      await sClient.spreadsheets.values.update({
+        spreadsheetId:SPREADSHEET_ID,
+        range:`${HOJA_ALERTAS_RETARDOS}!A1:E1`,
+        valueInputOption:'USER_ENTERED',
+        requestBody:{values:[['Tel','Nombre Corto','Fecha Aviso','Retardos Contados','Fechas Retardos']]}
+      })
+    }catch(err){
+      if(!String(err.message||'').toLowerCase().includes('already exists'))throw err
+    }
+  }
+}
+
+async function revisarTresRetardos(sock){
+  try{
+    const sClient=await sheetsClient()
+    await asegurarHojaAlertasRetardos(sClient)
+    const [asisRes,baseMap,alertRes,empRows]=await Promise.all([
+      sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A2:M'}),
+      getHorarioBaseMap(),
+      sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:`${HOJA_ALERTAS_RETARDOS}!A:E`}),
+      getRows('Empleados!A:K')
+    ])
+    const asis=asisRes.data.values||[], alertas=alertRes.data.values||[], empleados={}
+    empRows.slice(1).forEach(r=>{
+      const tel=normalizaTel(r[0])
+      if(tel)empleados[tel]={corto:r[1]||'',completo:r[3]||r[1]||'',suc:r[2]||''}
     })
-  }catch(e){ console.error('ERROR AVISO 3 RETARDOS:',e.message) }
+    const porEmpleado={}
+    for(const f of asis){
+      const tel=normalizaTel(f[0]),fecha=String(f[2]||'').trim(),entrada=f[3]||''
+      if(!tel||!fecha||fecha<FECHA_CORTE_RETARDOS||!entrada)continue
+      const info=empleados[tel]||{}
+      const prog=baseMap[tel]?.horas?.[parseFechaDia(fecha)]
+      const ret=calcularRetardo(entrada,prog?.entrada)
+      if(ret>15){
+        if(!porEmpleado[tel])porEmpleado[tel]=[]
+        porEmpleado[tel].push({fecha,min:ret,nombre:info.corto||f[1]||tel,suc:info.suc||f[6]||''})
+      }
+    }
+    for(const tel of Object.keys(porEmpleado)){
+      const lista=porEmpleado[tel].sort((a,b)=>a.fecha.localeCompare(b.fecha))
+      const prev=alertas.slice(1).filter(r=>normalizaTel(r[0])===tel)
+      const ultimo=prev.length?prev[prev.length-1]:null
+      const desde=ultimo?.[4]?String(ultimo[4]).split(',').map(x=>x.trim()).filter(Boolean):[]
+      const nuevos=lista.filter(x=>!desde.includes(x.fecha))
+      if(nuevos.length<3)continue
+      const grupo=grupoGerentesPorSucursal(lista[0].suc)
+      if(!grupo)continue
+      const ultimos=nuevos.slice(0,3)
+      const nombre=lista[0].nombre
+      const detalle=ultimos.map(x=>`${x.fecha}: ${x.min} min`).join('\n')
+      try{
+        await sock.sendMessage(grupo,{text:`⚠️ *3 RETARDOS*\n\n${nombre}\n${detalle}\n\nFavor de revisar y dar seguimiento.`})
+        const fechas=[...desde,...ultimos.map(x=>x.fecha)]
+        await sClient.spreadsheets.values.append({
+          spreadsheetId:SPREADSHEET_ID,
+          range:`${HOJA_ALERTAS_RETARDOS}!A:E`,
+          valueInputOption:'USER_ENTERED',
+          requestBody:{values:[[tel,nombre,fechaActualMX(),3,fechas.join(', ')]]}
+        })
+      }catch(e){console.error('ERROR ALERTA 3 RETARDOS:',e.message)}
+    }
+  }catch(e){console.error('ERROR REVISAR 3 RETARDOS:',e)}
+}
+
+function parseFechaDia(fecha){
+  const d=new Date(`${fecha}T12:00:00`)
+  return d.getDay()
+}
+
+function fechaActualMX(){
+  return fechaLaboral(new Date())
 }
 
 export async function handleChecador({sock,jid,m,loc,rawLid,tel10,tel}){
   const lat=loc.degreesLatitude,lng=loc.degreesLongitude
   let cercana=null,dMin=Infinity
-
-  // La ubicación recibida determina dónde se registra y a qué grupo se confirma.
   for(const s of SUCURSALES){
     const d=distM(lat,lng,s.lat,s.lng)
     if(d<dMin){dMin=d;cercana=s}
@@ -122,62 +161,48 @@ export async function handleChecador({sock,jid,m,loc,rawLid,tel10,tel}){
   const empRows=await getRows('Empleados!A:K')
   const getLid=r=>(r.find(x=>String(x).includes('@lid'))||'').trim()
   let emp=null
+  tel10=normalizaTel(tel10||tel)
 
   if(tel10.length>=10){
-    const i=empRows.findIndex((r,idx)=>idx>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10)
-    if(i>-1) emp=empRows[i]
+    const i=empRows.findIndex((r,idx)=>idx>0&&normalizaTel(r[0])===tel10)
+    if(i>-1)emp=empRows[i]
   }
 
-  if(!emp&&rawLid.includes('@lid')){
+  if(!emp&&rawLid?.includes('@lid')){
     const i=empRows.findIndex((r,idx)=>idx>0&&getLid(r)===rawLid)
     if(i>-1){
       emp=empRows[i]
-      tel10=(emp[0]||'').replace(/\D/g,'').slice(-10)
+      tel10=normalizaTel(emp[0])
     }
   }
 
-  const nombre=emp?(emp[3]||emp[1]):(m.pushName||tel10||'Desconocido')
-  const telF=emp?(emp[0]||'').replace(/\D/g,''):tel
-  const tel10F=telF.slice(-10)||tel10
-  const sucursalAsignada=emp?.[2]||cercana?.nombre||''
-
-  // La fecha se determina con jornada laboral 05:00-04:59.
+  const nombreCorto=emp?(emp[1]||emp[3]||tel10):(m.pushName||tel10||'Desconocido')
+  const nombreCompleto=emp?(emp[3]||emp[1]||nombreCorto):nombreCorto
+  const telF=emp?normalizaTel(emp[0]):normalizaTel(tel10||tel)
   const fLab=fechaLaboral()
   const asis=await getRows('Asistencia!A:M')
-  const idx=asis.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10F&&r[2]===fLab)
+  const idx=asis.findIndex((r,i)=>i>0&&normalizaTel(r[0])===telF&&r[2]===fLab)
   const hoy=idx>-1?asis[idx]:null
 
   const sClient=await sheetsClient()
   const baseMap=await getHorarioBaseMap()
-  const base=baseMap[tel10F]||baseMap[normaliza(nombre).split(' ')[0]]||null
+  const base=baseMap[telF]||baseMap[normaliza(nombreCompleto).split(' ')[0]]||null
 
-  let estatus='A TIEMPO',hObj=null,esRet=false,minRet=0
-
+  let estatus='A TIEMPO',hObj=null,esRet=false,minRet=0,hProg=''
   if(base){
-    const fe=new Date(`${fLab}T12:00:00`)
-    const dn=fe.getDay()
-
-    if(base.descansos.has(dn)) estatus='DESCANSO'
+    const fe=new Date(fLab+'T12:00:00'),dn=fe.getDay()
+    if(base.descansos.has(dn))estatus='DESCANSO'
     else if(base.horas[dn]){
-      hObj=base.horas[dn]
-
+      hObj=base.horas[dn];hProg=hObj.entrada||''
       if(hObj.entrada!=='LIBRE'&&hObj.entrada){
-        let ahora=minutos(horaMX())
-        let prog=minutos(hObj.entrada)
-
-        // Si la hora actual está entre 00:00 y 04:59, pertenece al final de la jornada laboral.
-        if(ahora<300) ahora+=1440
-        if(prog<300) prog+=1440
-
+        let ahora=minutos(horaMX()),prog=minutos(hObj.entrada)
+        if(ahora<300)ahora+=1440
+        if(prog<300)prog+=1440
         const dif=ahora-prog
-
         if(dif>TOLERANCIA_MIN){
           estatus=`RETARDO ${dif}min (Prog ${hObj.entrada})`
-          esRet=true
-          minRet=dif
-        }else{
-          estatus=`A TIEMPO (Prog ${hObj.entrada})`
-        }
+          esRet=true;minRet=dif
+        }else estatus=`A TIEMPO (Prog ${hObj.entrada})`
       }
     }
   }
@@ -191,7 +216,7 @@ export async function handleChecador({sock,jid,m,loc,rawLid,tel10,tel}){
 
       const h=horaMX()
       const jTxt=hObj?`${hObj.entrada}${hObj.salida?` - ${hObj.salida}`:''}`:'8h'
-      const row=[tel10F,nombre,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',calcularHorasTrabajadas(h,''),'0',jTxt]
+      const row=[telF,nombreCompleto,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',calcularHorasTrabajadas(h,''),'0',jTxt]
 
       if(idx===-1){
         await sClient.spreadsheets.values.append({
@@ -209,32 +234,18 @@ export async function handleChecador({sock,jid,m,loc,rawLid,tel10,tel}){
         })
       }
 
-      await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombre} en ${cercana.nombre} - ${h}`})
+      await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreCorto} en ${cercana.nombre} - ${h}`})
 
-      // Todo retardo mayor a 15 min genera aviso a gerentes.
       if(esRet){
-        const grupo=grupoGerentesPorSucursal(sucursalAsignada)
+        const grupo=grupoGerentesPorSucursal(emp?.[2]||cercana.nombre)
         if(grupo){
-          let texto=`⚠️ RETARDO ${minRet}min - ${nombre}\nProg: ${hObj?.entrada||''}\nLlegó: ${h}\n[${sucursalAsignada}]`
-
-          if(minRet>=AVISO_RETARDO_60_MIN){
-            texto=`⚠️ RETARDO ${minRet}min - ${nombre}\nProg: ${hObj?.entrada||''}\nLlegó: ${h}\n⚠️ Favor de confirmar si el empleado se queda / trabaja su turno.\n[${sucursalAsignada}]`
-          }
-
-          const key60=`${fLab}_${tel10F}`
-          if(minRet>=AVISO_RETARDO_60_MIN){
-            if(fechaAvisos60!==fLab){avisos60Hoy.clear();fechaAvisos60=fLab}
-            if(!avisos60Hoy.has(key60)){
-              avisos60Hoy.add(key60)
-              await sock.sendMessage(grupo,{text:texto})
-            }
-          }else{
-            await sock.sendMessage(grupo,{text:texto})
-          }
+          let extra60=''
+          if(minRet>=AVISO_RETARDO_60_MIN)extra60=`\n\n⚠️ Lleva ${minRet} min de retardo. Favor de confirmar si permanece a trabajar.`
+          await sock.sendMessage(grupo,{text:`⚠️ *RETARDO* - ${nombreCorto}\nProg: ${hProg}\nEntrada: ${h}\nRetardo: ${minRet} min\n[${emp?.[2]||cercana.nombre}]${extra60}`})
         }
-
-        await revisarTresRetardos(sock,tel10F,nombre,sucursalAsignada)
       }
+
+      if(esRet)await revisarTresRetardos(sock)
     }else{
       if(hoy[5]){
         await sock.sendMessage(jid,{text:`Salida ya registrada`})
@@ -246,8 +257,7 @@ export async function handleChecador({sock,jid,m,loc,rawLid,tel10,tel}){
         return
       }
 
-      const h=horaMX()
-      const jTxt=hoy[12]||'8h'
+      const h=horaMX(),jTxt=hoy[12]||'8h'
       const {trabajadas,extra}=calcularExtra(hoy[3],h,hObj?.entrada||null,hObj?.salida||null)
 
       await sClient.spreadsheets.values.update({
@@ -257,8 +267,7 @@ export async function handleChecador({sock,jid,m,loc,rawLid,tel10,tel}){
         requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),trabajadas,extra,jTxt]]}
       })
 
-      // WhatsApp solo confirma la salida. Trab/Extra quedan en Sheets.
-      await sock.sendMessage(jid,{text:`✅ Salida - ${nombre} en ${cercana.nombre} - ${h}`})
+      await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCorto} en ${cercana.nombre} - ${h}`})
     }
   }catch(e){
     console.error('ERROR CHECADOR:',e)
@@ -266,65 +275,69 @@ export async function handleChecador({sock,jid,m,loc,rawLid,tel10,tel}){
 }
 
 export async function checkNoLlegaron(sock){
-  const hoy=fechaLaboral()
+  try{
+    const hoy=fechaLaboral()
+    const ahora=horaMX()
+    const ahoraMinRaw=minutos(ahora)
+    let ahoraMin=ahoraMinRaw
+    if(ahoraMin<300)ahoraMin+=1440
 
-  if(fechaAvisos!==hoy){
-    avisosHoy.clear()
-    fechaAvisos=hoy
-  }
+    const sClient=await sheetsClient()
+    const [baseRows,asisRows,empRows]=await Promise.all([
+      getRows('Horario_Base!A2:K'),
+      getRows('Asistencia!A2:M'),
+      getRows('Empleados!A:K')
+    ])
 
-  const ahoraMinBase=minutos(horaMX())
-  const ahoraMin=ahoraMinBase<300?ahoraMinBase+1440:ahoraMinBase
+    await asegurarHojaAvisos(sClient)
 
-  const baseRows=await getRows('Horario_Base!A2:K')
-  const asisRows=await getRows('Asistencia!A2:M')
+    const empMap={}
+    empRows.slice(1).forEach(r=>{
+      const tel=normalizaTel(r[0])
+      if(tel)empMap[tel]={corto:r[1]||'',completo:r[3]||r[1]||'',suc:r[2]||''}
+    })
 
-  // El día de horario se toma de la fecha laboral, no de la fecha calendario.
-  const diaNum=new Date(`${hoy}T12:00:00`).getDay()
+    const diaNum=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).getDay()
 
-  for(const r of baseRows){
-    const tel=(r[0]||'').replace(/\D/g,'').slice(-10)
-    if(!tel) continue
+    for(const r of baseRows){
+      const tel=normalizaTel(r[0])
+      if(!tel)continue
 
-    const key=`${hoy}_${tel}`
-    if(avisosHoy.has(key)) continue
+      const mapa={1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
+      const v=(mapa[diaNum]||'').toString().trim()
+      const parsed=parseHorarioRango(v)
+      if(!parsed||parsed.entrada==='LIBRE'||!parsed.entrada)continue
 
-    const mapa={1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
-    const v=(mapa[diaNum]||'').toString().trim()
-    const parsed=parseHorarioRango(v)
+      let progMin=minutos(parsed.entrada)
+      if(progMin<300)progMin+=1440
 
-    if(!parsed||parsed.entrada==='LIBRE'||!parsed.entrada) continue
+      const dif=ahoraMin-progMin
+      if(dif<AVISO_FALTA_MIN)continue
 
-    let progMin=minutos(parsed.entrada)
-    if(progMin<300) progMin+=1440
+      const registro=asisRows.find(a=>normalizaTel(a[0])===tel&&a[2]===hoy&&a[3])
+      if(registro)continue
 
-    const dif=ahoraMin-progMin
+      const yaAvisado=await yaAvisadoNoLlegada(sClient,tel,hoy)
+      if(yaAvisado)continue
 
-    // No avisar antes de la hora programada.
-    if(dif<AVISO_FALTA_MIN) continue
+      const info=empMap[tel]||{}
+      const nombreCorto=info.corto||r[1]||tel
+      const suc=info.suc||r[2]||''
+      const grupo=grupoGerentesPorSucursal(suc)
+      if(!grupo)continue
 
-    const registro=asisRows.find(a=>
-      (a[0]||'').replace(/\D/g,'').slice(-10)===tel &&
-      a[2]===hoy &&
-      a[3]
-    )
+      const horaAviso=horaMX()
 
-    if(registro) continue
-
-    avisosHoy.add(key)
-
-    const nombre=r[1]||tel
-    const sucursal=r[2]||''
-    const grupoAviso=grupoGerentesPorSucursal(sucursal)
-
-    if(grupoAviso){
       try{
-        await sock.sendMessage(grupoAviso,{
-          text:`⚠️ NO HA LLEGADO - ${nombre}\nProg: ${parsed.entrada}\nMás de 20 min sin registrar entrada\n[${sucursal}]`
+        await sock.sendMessage(grupo,{
+          text:`⚠️ *NO HA LLEGADO* - ${nombreCorto}\nProg: ${parsed.entrada}\nMás de 20 min sin registrar entrada\n[${suc}]`
         })
+        await registrarAvisoNoLlegada(sClient,tel,hoy,horaAviso,nombreCorto)
       }catch(e){
         console.error('ERROR AVISO NO LLEGADA:',e.message)
       }
     }
+  }catch(e){
+    console.error('ERROR CHECK NO LLEGARON:',e)
   }
 }
