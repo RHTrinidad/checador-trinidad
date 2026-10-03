@@ -1,270 +1,358 @@
-import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys'
-import qrcodeTerminal from 'qrcode-terminal'
-import QRCode from 'qrcode'
-import express from 'express'
-import fs from 'fs'
-import path from 'path'
-import P from 'pino'
+import makeWASocket,{useMultiFileAuthState,DisconnectReason,fetchLatestBaileysVersion} from '@whiskeysockets/baileys'
+import pino from 'pino'
+import qrcode from 'qrcode-terminal'
+import cron from 'node-cron'
+
 import {
   GRUPOS,
-  PAQUETES,
   getTipoGrupo,
-  GRUPO_COYOACAN_ID,
-  GRUPO_BUCARELI_ID,
-  GRUPO_CHECADOR_COYOACAN_ID,
-  GRUPO_CHECADOR_BUCARELI_ID,
+  GRUPO_REPORTES_TRINIDAD_ID,
   GRUPO_PRUEBAS_ID,
-  GRUPO_REPORTES_TRINIDAD_ID
+  GRUPO_COYOACAN_ID,
+  GRUPO_BUCARELI_ID
 } from './src/config.js'
-import { handleChecador, checkNoLlegaron, cerrarSalidasPendientes } from './src/checador.js'
-import { handleReportes } from './src/reportes.js'
-import { handleCompras } from './src/compras.js'
 
-const app=express()
-app.use(express.json({limit:'20mb'}))
+import {
+  handleChecador,
+  registrarDescansos,
+  cerrarSalidasPendientes,
+  checkNoLlegaron
+} from './src/checador.js'
 
-let lastQR=null
+import {handleReportes} from './src/reportes.js'
+import {procesarCompra} from './src/compras.js'
 
-app.get('/',(r,s)=>s.send('Bot OK - /qr'))
+const AUTH_DIR='/app/auth'
 
-app.get('/qr',async(r,s)=>{
-  if(!lastQR)return s.send('No QR aun, espera 5 seg y recarga')
-  const d=await QRCode.toDataURL(lastQR)
-  s.send(`<div style="text-align:center"><h2>Escanea</h2><img src="${d}" style="width:400px"><p>Se actualiza cada 15s</p></div>`)
-})
+const COMANDOS_REPORTES=/^(info|datos|cuenta bancaria|cuenta empleado|datos bancarios|cuenta|banco|clave|clabe|asistencia hoy|resumen|reporte|compras de hoy|faltas|retardos|críticos|criticos|graves|excel|reporte semanal|reporte mensual)\b/i
 
-app.get('/backup',(r,s)=>{
-  try{
-    const dir='/app/auth'
-    if(!fs.existsSync(dir))return s.json({error:'no auth'})
-    const files=fs.readdirSync(dir)
-    if(files.length===0)return s.json({error:'auth vacio - escanea QR'})
-    let o={}
-    files.forEach(f=>{
-      try{o[f]=fs.readFileSync(path.join(dir,f),'utf8')}catch{}
-    })
-    s.json(o)
-  }catch(e){
-    s.json({error:e.message})
+const sesion={
+  sock:null,
+  conectado:false
+}
+
+let iniciando=false
+
+function textoMensaje(m){
+  return (
+    m.message?.conversation ||
+    m.message?.extendedTextMessage?.text ||
+    m.message?.imageMessage?.caption ||
+    m.message?.videoMessage?.caption ||
+    ''
+  ).trim()
+}
+
+function obtenerLoc(m){
+  const loc=m.message?.locationMessage
+  if(!loc)return null
+
+  return {
+    degreesLatitude:loc.degreesLatitude,
+    degreesLongitude:loc.degreesLongitude
   }
-})
+}
 
-app.post('/restore',(r,s)=>{
-  try{
-    const dir='/app/auth'
-    if(!fs.existsSync(dir))fs.mkdirSync(dir,{recursive:true})
-    const data=r.body
-    const payload=data.data?data.data:data
-    let c=0
+function obtenerRawLid(m){
+  return (
+    m.key?.participant ||
+    m.key?.remoteJid ||
+    ''
+  ).toString()
+}
 
-    for(const [f,v] of Object.entries(payload)){
-      if(f==='dir'||f==='files')continue
-      if(typeof v==='string'&&v.length>10){
-        fs.writeFileSync(path.join(dir,f),v,'utf8')
-        c++
-      }
-    }
+function obtenerTelefono(m){
+  const jid=(
+    m.key?.participant ||
+    m.key?.remoteJid ||
+    ''
+  ).toString()
 
-    s.json({ok:true,restaurados:c})
-  }catch(e){
-    s.json({error:e.message})
-  }
-})
+  const limpio=jid.split(':')[0].split('@')[0].replace(/\D/g,'')
 
-app.listen(process.env.PORT||3000,()=>console.log('WEB '+(process.env.PORT||3000)+' OK'))
+  return limpio
+}
 
-async function getFiltro(jid){
-  if(jid===GRUPO_PRUEBAS_ID||jid===GRUPO_REPORTES_TRINIDAD_ID)return null
-  if(jid===GRUPO_COYOACAN_ID||jid===GRUPO_CHECADOR_COYOACAN_ID)return 'coyoacan'
-  if(jid===GRUPO_BUCARELI_ID||jid===GRUPO_CHECADOR_BUCARELI_ID)return 'bucareli'
+function esGrupo(jid){
+  return jid?.endsWith('@g.us')
+}
+
+function getFiltro(jid){
+  if(jid===GRUPO_COYOACAN_ID)return 'coyoacan'
+  if(jid===GRUPO_BUCARELI_ID)return 'juarez'
   return null
 }
 
-const COMANDOS_REPORTES=/^(datos bancarios|cuenta bancaria|cuenta empleado|info|ficha|datos|dato|numero|número|num|tel|telefono|teléfono|cuenta|banco|clave|clabe)\s+.+|^(asistencia hoy|resumen|reporte|checador|compras de hoy|faltas|retardos|críticos|criticos|graves)/i
+async function ejecutarProcesosAutomaticos(){
+  if(!sesion.sock||!sesion.conectado)return
 
-let cronInterval=null
-
-async function start(){
-  const authDir='/app/auth'
-
-  if(!fs.existsSync(authDir)){
-    fs.mkdirSync(authDir,{recursive:true})
+  try{
+    await registrarDescansos()
+  }catch(e){
+    console.error('Error registrarDescansos:',e)
   }
 
-  console.log('AUTH DIR:',authDir)
+  try{
+    await cerrarSalidasPendientes()
+  }catch(e){
+    console.error('Error cerrarSalidasPendientes:',e)
+  }
 
-  const {state,saveCreds}=await useMultiFileAuthState(authDir)
-  const {version}=await fetchLatestBaileysVersion()
-
-  const sock=makeWASocket({
-    version,
-    auth:state,
-    logger:P({level:'fatal'}),
-    browser:['Trinidad Bot','Chrome','121'],
-    getMessage:async()=>undefined
-  })
-
-  sock.ev.on('creds.update',saveCreds)
-
-  sock.ev.on('connection.update',async({connection,lastDisconnect,qr})=>{
-    if(qr){
-      lastQR=qr
-      console.log('QR generado')
-      qrcodeTerminal.generate(qr,{small:false})
-    }
-
-    if(connection==='close'){
-      const c=lastDisconnect?.error?.output?.statusCode
-
-      if(c!==DisconnectReason.loggedOut){
-        console.log('WhatsApp desconectado. Reconectando...')
-        setTimeout(()=>start(),5000)
-      }else{
-        console.log('Sesión cerrada. Se requiere nuevo QR.')
-      }
-    }
-
-    if(connection==='open'){
-      console.log('CONECTADO MODULAR + VOLUME OK')
-
-      lastQR=null
-
-      if(cronInterval)clearInterval(cronInterval)
-
-      cronInterval=setInterval(()=>{
-        cerrarSalidasPendientes().catch(e=>{
-          console.log('cierre auto error',e.message)
-        })
-
-        checkNoLlegaron(sock).catch(e=>{
-          console.log('cron error',e.message)
-        })
-      },10*60*1000)
-
-      // Ejecutar también inmediatamente al conectar.
-      cerrarSalidasPendientes().catch(e=>{
-        console.log('cierre auto inicial error',e.message)
-      })
-    }
-  })
-
-  sock.ev.on('messages.upsert',async({messages})=>{
-    try{
-      const m=messages[0]
-
-      if(!m||m.key.fromMe)return
-
-      const jid=m.key.remoteJid
-
-      if(!jid?.endsWith('@g.us'))return
-
-      const texto=
-        m.message?.conversation||
-        m.message?.extendedTextMessage?.text||
-        m.message?.imageMessage?.caption||
-        m.message?.documentMessage?.caption||
-        ''
-
-      const loc=
-        m.message?.locationMessage||
-        m.message?.liveLocationMessage
-
-      const textoTrim=texto.trim()
-      const textoLow=textoTrim.toLowerCase()
-
-      if(textoLow==='id'){
-        console.log(`ID solicitado en ${jid}`)
-        await sock.sendMessage(jid,{text:jid})
-        return
-      }
-
-      const rawLid=m.key.participant||''
-      const realPn=m.key.participantPn||''
-
-      let pn=''
-
-      try{
-        pn=await sock.signalRepository?.lidMapping?.getPNForLID(rawLid)||''
-      }catch{}
-
-      const rawId=realPn||pn||rawLid||jid
-      const tel=(rawId||'').toString().replace(/\D/g,'')
-      const tel10=tel.slice(-10)
-
-      const esImagen=!!m.message?.imageMessage
-      const tipo=getTipoGrupo(jid)
-
-      if(!tipo){
-        console.log(`Grupo no configurado: ${jid}`)
-        return
-      }
-
-      const filtro=await getFiltro(jid)
-
-      if(tipo==='REPORTES'){
-        if(esImagen||/^compras/i.test(textoTrim)){
-          const ok=await handleCompras({
-            sock,
-            jid,
-            m,
-            texto,
-            esImagen
-          })
-
-          if(ok)return
-        }
-
-        if(COMANDOS_REPORTES.test(textoTrim)){
-          await handleReportes({
-            texto,
-            jid,
-            sock,
-            filtroGrupo:filtro
-          })
-
-          return
-        }
-
-        return
-      }
-
-      if(tipo==='CHECADORES'){
-        if(!loc)return
-
-        console.log(`Ubicación recibida de ${tel10} en ${jid}`)
-
-        await handleChecador({
-          sock,
-          jid,
-          m,
-          loc,
-          rawLid,
-          tel10,
-          tel
-        })
-
-        return
-      }
-
-      if(tipo==='GERENTES'){
-        if(loc)return
-
-        if(!COMANDOS_REPORTES.test(textoTrim))return
-
-        await handleReportes({
-          texto,
-          jid,
-          sock,
-          filtroGrupo:filtro
-        })
-
-        return
-      }
-
-    }catch(e){
-      console.error('Error upsert',e)
-    }
-  })
+  try{
+    await checkNoLlegaron(sesion.sock)
+  }catch(e){
+    console.error('Error checkNoLlegaron:',e)
+  }
 }
 
-start()
+async function conectar(){
+
+  if(iniciando)return
+  iniciando=true
+
+  try{
+
+    const {state,saveCreds}=await useMultiFileAuthState(AUTH_DIR)
+
+    console.log('AUTH DIR:',AUTH_DIR)
+
+    let version
+
+    try{
+      const latest=await fetchLatestBaileysVersion()
+      version=latest.version
+      console.log('Baileys version:',version)
+    }catch{
+      console.log('No se pudo obtener version de Baileys, usando default')
+    }
+
+    const sock=makeWASocket({
+      auth:state,
+      version,
+      logger:pino({level:'silent'}),
+      printQRInTerminal:false,
+      browser:['RH Trinidad','Chrome','1.0.0'],
+      markOnlineOnConnect:false,
+      syncFullHistory:false,
+      generateHighQualityLinkPreview:false
+    })
+
+    sesion.sock=sock
+
+    sock.ev.on('creds.update',saveCreds)
+
+    sock.ev.on('connection.update',async(update)=>{
+
+      const {connection,lastDisconnect,qr}=update
+
+      if(qr){
+        console.log('ESCANEA ESTE QR:')
+        qrcode.generate(qr,{small:true})
+      }
+
+      if(connection==='open'){
+
+        console.log('CONECTADO MODULAR + VOLUME OK')
+
+        sesion.conectado=true
+        iniciando=false
+
+        try{
+          await ejecutarProcesosAutomaticos()
+        }catch(e){
+          console.error('Error procesos iniciales:',e)
+        }
+
+        return
+      }
+
+      if(connection==='close'){
+
+        sesion.conectado=false
+        sesion.sock=null
+
+        const code=lastDisconnect?.error?.output?.statusCode
+
+        console.log('Conexion cerrada. Codigo:',code)
+
+        if(code===DisconnectReason.loggedOut){
+
+          console.error('Sesion cerrada / logout. Se requiere volver a vincular.')
+
+          iniciando=false
+
+        }else{
+
+          iniciando=false
+
+          setTimeout(()=>{
+            conectar().catch(e=>{
+              console.error('Error reconectando:',e)
+            })
+          },5000)
+        }
+      }
+    })
+
+    sock.ev.on('messages.upsert',async({messages,type})=>{
+
+      if(type!=='notify')return
+
+      for(const m of messages){
+
+        try{
+
+          if(!m.message)continue
+          if(m.key?.fromMe)continue
+
+          const jid=m.key?.remoteJid
+
+          if(!jid)continue
+
+          const tipoGrupo=getTipoGrupo(jid)
+
+          const texto=textoMensaje(m)
+          const textoLow=texto.toLowerCase().trim()
+
+          const loc=obtenerLoc(m)
+
+          const rawLid=obtenerRawLid(m)
+          const tel=obtenerTelefono(m)
+          const tel10=tel.slice(-10)
+
+          // ==========================================
+          // GRUPOS CHECADOR
+          // ==========================================
+
+          if(tipoGrupo==='CHECADORES'){
+
+            // Los grupos checadores solo procesan ubicaciones.
+            if(!loc)continue
+
+            await handleChecador({
+              sock,
+              jid,
+              m,
+              loc,
+              rawLid,
+              tel10,
+              tel
+            })
+
+            continue
+          }
+
+          // ==========================================
+          // COMPRAS / IMAGENES
+          // ==========================================
+
+          if(
+            tipoGrupo==='REPORTES' ||
+            tipoGrupo==='GERENTES'
+          ){
+
+            const esImagen=!!m.message?.imageMessage
+
+            if(esImagen){
+
+              try{
+                await procesarCompra({
+                  sock,
+                  jid,
+                  m
+                })
+              }catch(e){
+                console.error('Error procesando compra:',e)
+              }
+
+              continue
+            }
+          }
+
+          // ==========================================
+          // REPORTES / GERENTES / PRUEBAS
+          // ==========================================
+
+          if(
+            tipoGrupo==='REPORTES' ||
+            tipoGrupo==='GERENTES'
+          ){
+
+            if(COMANDOS_REPORTES.test(textoLow)){
+
+              try{
+
+                await handleReportes({
+                  sock,
+                  jid,
+                  m,
+                  texto,
+                  filtroGrupo:getFiltro(jid)
+                })
+
+              }catch(e){
+
+                console.error('Error handleReportes:',e)
+
+                try{
+                  await sock.sendMessage(
+                    jid,
+                    {text:'⚠️ Ocurrió un error al generar el reporte.'},
+                    {quoted:m}
+                  )
+                }catch{}
+              }
+
+              continue
+            }
+          }
+
+        }catch(e){
+
+          console.error('Error procesando mensaje:',e)
+
+        }
+      }
+    })
+
+  }catch(e){
+
+    console.error('Error iniciando WhatsApp:',e)
+
+    sesion.conectado=false
+    sesion.sock=null
+    iniciando=false
+
+    setTimeout(()=>{
+      conectar().catch(err=>{
+        console.error('Error en reconexión:',err)
+      })
+    },5000)
+  }
+}
+
+
+// =====================================================
+// PROCESOS AUTOMÁTICOS CADA 10 MINUTOS
+// =====================================================
+
+cron.schedule('*/10 * * * *',async()=>{
+
+  if(!sesion.conectado||!sesion.sock)return
+
+  console.log('⏱️ Ejecutando procesos automáticos...')
+
+  await ejecutarProcesosAutomaticos()
+
+})
+
+
+// =====================================================
+// INICIAR BOT
+// =====================================================
+
+console.log('🚀 Iniciando RH Trinidad...')
+
+conectar().catch(e=>{
+  console.error('Error inicial:',e)
+})
