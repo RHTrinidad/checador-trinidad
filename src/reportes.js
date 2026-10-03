@@ -21,23 +21,32 @@ export async function asistenciaHoy(filtroSucursal,jid,sock){
   const diaNum=ahoraMXDate.getDay()
 
   const filtro=(filtroSucursal||'').toLowerCase()
+  const esTodo=!filtro
   const esCoyo=filtro.includes('coyo')||filtro.includes('hotel')
   const esJuarez=filtro.includes('juarez')||filtro.includes('bucareli')
 
   let llego=[],retardo=[],falta=[],futuro=[]
 
   for(const r of baseRows){
+    const nombre=r[1]||''
+    if(!nombre.trim())continue
+
     const sucBaseLower=(r[2]||'').toLowerCase()
     const sucBaseOriginal=r[2]||''
     let inc=false
 
-    if(esCoyo)inc=sucBaseLower.includes('coyo')||sucBaseLower.includes('hotel')||sucBaseLower.includes('trinidad')
-    else if(esJuarez)inc=sucBaseLower.includes('juarez')||sucBaseLower.includes('bucareli')
-    else inc=sucBaseLower.includes(filtro)
+    if(esCoyo){
+      inc=sucBaseLower.includes('coyo')||sucBaseLower.includes('hotel')
+    }else if(esJuarez){
+      inc=sucBaseLower.includes('juarez')||sucBaseLower.includes('bucareli')
+    }else if(esTodo){
+      inc=true
+    }else{
+      inc=sucBaseLower.includes(filtro)
+    }
 
     if(!inc)continue
 
-    const nombre=r[1]||''
     const tel=(r[0]||'').replace(/\D/g,'').slice(-10)
     const mapa={1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
     const v=(mapa[diaNum]||'').toString().trim()
@@ -83,7 +92,9 @@ export async function asistenciaHoy(filtroSucursal,jid,sock){
     }
   }
 
-  const txt=`📍 *ASISTENCIA HOY ${fLab} - ${filtroSucursal.toUpperCase()}* ${horaMX()}
+  const tituloSucursal=filtroSucursal?filtroSucursal.toUpperCase():'TODO EL PERSONAL'
+
+  const txt=`📍 *ASISTENCIA HOY ${fLab} - ${tituloSucursal}* ${horaMX()}
 
 ✅ *A TIEMPO (${llego.length}):*
 ${llego.join('\n')||'-'}
@@ -893,7 +904,7 @@ export async function handleReportes({texto,jid,sock,filtroGrupo}){
    * Todos usan prioridad:
    * CLABE -> Cuenta -> Tarjeta
    */
-  const matchBancario=textoTrim.match(/^(datos bancarios|cuenta empleado|cuenta|banco|clave|clabe)\s+(.+)$/i)
+  const matchBancario=textoTrim.match(/^(datos bancarios|cuenta bancaria|cuenta empleado|cuenta|banco|clave|clabe)\s+(.+)$/i)
 
   if(matchBancario){
     const comando=normaliza(matchBancario[1])
@@ -920,7 +931,25 @@ export async function handleReportes({texto,jid,sock,filtroGrupo}){
   if(low.startsWith('asistencia hoy')){
     let suc=low.replace('asistencia hoy','').trim()
 
-    if(!suc)suc=filtroGrupo||'coyoacan'
+    if(filtroGrupo){
+      if(suc){
+        const pedidoCoyo=suc.includes('coyo')||suc.includes('hotel')
+        const pedidoBuc=suc.includes('bucareli')||suc.includes('juarez')
+
+        if(
+          (filtroGrupo==='coyoacan'&&!pedidoCoyo)||
+          (filtroGrupo==='bucareli'&&!pedidoBuc)
+        ){
+          suc=filtroGrupo
+        }else{
+          suc=pedidoCoyo?'coyoacan':'bucareli'
+        }
+      }else{
+        suc=filtroGrupo
+      }
+    }else{
+      suc=suc||null
+    }
 
     await asistenciaHoy(suc,jid,sock)
     return true
