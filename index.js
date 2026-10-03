@@ -1,13 +1,12 @@
-```js
 import makeWASocket,{useMultiFileAuthState,DisconnectReason,fetchLatestBaileysVersion}from '@whiskeysockets/baileys'
 import pino from 'pino'
 import qrcode from 'qrcode-terminal'
 import cron from 'node-cron'
 
-import {getTipoGrupo,GRUPO_COYOACAN_ID,GRUPO_BUCARELI_ID}from './src/config.js'
-import {handleChecador,registrarDescansos,cerrarSalidasPendientes,checkNoLlegaron}from './src/checador.js'
-import {handleReportes}from './src/reportes.js'
-import {handleCompras}from './src/compras.js'
+import {getTipoGrupo,GRUPO_COYOACAN_ID,GRUPO_BUCARELI_ID} from './src/config.js'
+import {handleChecador,registrarDescansos,cerrarSalidasPendientes,checkNoLlegaron} from './src/checador.js'
+import {handleReportes} from './src/reportes.js'
+import {handleCompras} from './src/compras.js'
 
 const AUTH_DIR='/app/auth'
 
@@ -26,20 +25,23 @@ const textoMensaje=m=>(
 
 const obtenerLoc=m=>{
   const x=m.message?.locationMessage
-  return x?{degreesLatitude:x.degreesLatitude,degreesLongitude:x.degreesLongitude}:null
+  return x?{
+    degreesLatitude:x.degreesLatitude,
+    degreesLongitude:x.degreesLongitude
+  }:null
 }
 
-/*
- * Identificación del participante.
- *
- * Si WhatsApp entrega @lid, lo conservamos como LID.
- * No usamos los números del LID como si fueran teléfono.
- */
 const obtenerIdentidad=m=>{
   const participante=(m.key?.participant||'').toString()
   const remoto=(m.key?.remoteJid||'').toString()
 
-  const candidatos=[participante,remoto]
+  const candidatos=[
+    m.key?.participantPn,
+    m.key?.senderPn,
+    m.key?.participantAlt,
+    participante,
+    remoto
+  ].filter(Boolean).map(x=>x.toString())
 
   const lid=candidatos.find(x=>x.includes('@lid'))||''
 
@@ -68,9 +70,24 @@ const getFiltro=jid=>
 
 async function procesos(){
   if(!sesion.sock||!sesion.conectado)return
-  try{await registrarDescansos()}catch(e){console.error('Descansos:',e)}
-  try{await cerrarSalidasPendientes()}catch(e){console.error('Cierres:',e)}
-  try{await checkNoLlegaron(sesion.sock)}catch(e){console.error('No llegados:',e)}
+
+  try{
+    await registrarDescansos()
+  }catch(e){
+    console.error('Descansos:',e)
+  }
+
+  try{
+    await cerrarSalidasPendientes()
+  }catch(e){
+    console.error('Cierres:',e)
+  }
+
+  try{
+    await checkNoLlegaron(sesion.sock)
+  }catch(e){
+    console.error('No llegados:',e)
+  }
 }
 
 async function conectar(){
@@ -79,9 +96,11 @@ async function conectar(){
 
   try{
     const {state,saveCreds}=await useMultiFileAuthState(AUTH_DIR)
+
     console.log('AUTH DIR:',AUTH_DIR)
 
     let version
+
     try{
       version=(await fetchLatestBaileysVersion()).version
       console.log('Baileys version:',version)
@@ -101,6 +120,7 @@ async function conectar(){
     })
 
     sesion.sock=sock
+
     sock.ev.on('creds.update',saveCreds)
 
     sock.ev.on('connection.update',async({connection,lastDisconnect,qr})=>{
@@ -121,6 +141,7 @@ async function conectar(){
         sesion.sock=null
 
         const code=lastDisconnect?.error?.output?.statusCode
+
         console.log('Conexion cerrada. Codigo:',code)
 
         iniciando=false
@@ -128,7 +149,9 @@ async function conectar(){
         if(code!==DisconnectReason.loggedOut){
           setTimeout(()=>conectar().catch(console.error),5000)
         }else{
-          console.error('Sesion cerrada / logout. Se requiere volver a vincular.')
+          console.error(
+            'Sesion cerrada / logout. Se requiere volver a vincular.'
+          )
         }
       }
     })
@@ -161,6 +184,7 @@ async function conectar(){
                 tel:identidad.tel
               })
             }
+
             continue
           }
 
@@ -168,7 +192,14 @@ async function conectar(){
             (tipoGrupo==='REPORTES'||tipoGrupo==='GERENTES')&&
             (esImagen||/^compras\b/i.test(texto))
           ){
-            await handleCompras({sock,jid,m,texto,esImagen})
+            await handleCompras({
+              sock,
+              jid,
+              m,
+              texto,
+              esImagen
+            })
+
             continue
           }
 
@@ -183,6 +214,7 @@ async function conectar(){
               texto,
               filtroGrupo:getFiltro(jid)
             })
+
             continue
           }
 
@@ -194,9 +226,11 @@ async function conectar(){
 
   }catch(e){
     console.error('Error iniciando WhatsApp:',e)
+
     sesion.conectado=false
     sesion.sock=null
     iniciando=false
+
     setTimeout(()=>conectar().catch(console.error),5000)
   }
 }
@@ -207,9 +241,5 @@ cron.schedule('*/10 * * * *',async()=>{
 },{timezone:'America/Mexico_City'})
 
 console.log('🚀 Iniciando RH Trinidad...')
+
 conectar().catch(console.error)
-```
-
-**Ojo:** este cambio de `index.js` solo prepara correctamente `rawLid`, `tel` y `tel10`. Todavía falta conectar esas funciones nuevas de `sheets.js` dentro de `checador.js`.
-
-El siguiente archivo será **`src/checador.js`**, donde haremos la parte importante: **encontrar a Wilbert, usar su nombre real y guardar automáticamente su LID en `Empleados!K`**.
