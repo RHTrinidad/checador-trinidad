@@ -1,1077 +1,361 @@
-import ExcelJS from 'exceljs'
-import fs from 'fs'
-import path from 'path'
-import os from 'os'
-import { SPREADSHEET_ID } from './config.js'
+import { SUCURSALES, GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID, SPREADSHEET_ID } from './config.js'
+import { distM, fechaLaboral, horaMX, minutos, normaliza, calcularHorasTrabajadas, calcularExtra, parseHorarioRango } from './utils.js'
 import { getRows, sheetsClient, getHorarioBaseMap } from './sheets.js'
-import { fechaLaboral, horaMX, minutos, parseFechaMX, normaliza, parseHorarioRango, getRangoSemana, sucursalCoincideConFiltro, scoreEmpleado, calcularExtra } from './utils.js'
 
-const pendientesReporte=new Map()
+const TOLERANCIA_MIN = 15
+const AVISO_FALTA_MIN = 20
+const CIERRE_AUTO_HORAS = 16
 
-export async function asistenciaHoy(filtroSucursal,jid,sock){
-  const sClient=await sheetsClient()
-  const [baseRows,asisRows]=await Promise.all([
-    getRows('Horario_Base!A2:K'),
-    sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A2:M'}).then(r=>r.data.values||[])
-  ])
+let avisosHoy = new Set()
+let fechaAvisos = ''
+
+export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
+  const lat=loc.degreesLatitude,lng=loc.degreesLongitude
+  let cercana=null,dMin=Infinity
+
+  for(const s of SUCURSALES){
+    const d=distM(lat,lng,s.lat,s.lng)
+    if(d<dMin){dMin=d;cercana=s}
+  }
+
+  const empRows=await getRows('Empleados!A:K')
+  const getLid=r=>(r.find(x=>String(x).includes('@lid'))||'').trim()
+
+  let emp=null
+
+  if(tel10.length>=10){
+    const i=empRows.findIndex((r,idx)=>idx>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10)
+    if(i>-1) emp=empRows[i]
+  }
+
+  if(!emp&&rawLid.includes('@lid')){
+    const i=empRows.findIndex((r,idx)=>idx>0&&getLid(r)===rawLid)
+    if(i>-1){
+      emp=empRows[i]
+      tel10=(emp[0]||'').replace(/\D/g,'').slice(-10)
+    }
+  }
+
+  const nombre=emp?(emp[3]||emp[1]):(m.pushName||tel10||'Desconocido')
+  const telF=emp?(emp[0]||'').replace(/\D/g,''):tel
+  const tel10F=telF.slice(-10)||tel10
 
   const fLab=fechaLaboral()
-  const ahoraMin=minutos(horaMX())
-  const ahoraMXDate=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}))
-  const diaNum=ahoraMXDate.getDay()
+  const asis=await getRows('Asistencia!A:M')
+  const idx=asis.findIndex((r,i)=>i>0&&r[0]&&r[0].replace(/\D/g,'').slice(-10)===tel10F&&r[2]===fLab)
+  const hoy=idx>-1?asis[idx]:null
 
-  const filtro=(filtroSucursal||'').toLowerCase()
-  const esTodo=!filtro
-  const esCoyo=filtro.includes('coyo')||filtro.includes('hotel')
-  const esJuarez=filtro.includes('juarez')||filtro.includes('bucareli')
+  const sClient=await sheetsClient()
+  const baseMap=await getHorarioBaseMap()
+  const base=baseMap[tel10F]||baseMap[normaliza(nombre).split(' ')[0]]||null
 
-  let llego=[],retardo=[],falta=[],futuro=[]
+  let estatus='A TIEMPO'
+  let hObj=null
 
-  for(const r of baseRows){
-    const nombre=r[1]||''
-    if(!nombre.trim())continue
+  if(base){
+    const fe=new Date(fLab+'T12:00:00')
+    const dn=fe.getDay()
 
-    const sucBaseLower=(r[2]||'').toLowerCase()
-    const sucBaseOriginal=r[2]||''
-    let inc=false
+    if(base.descansos.has(dn)){
+      estatus='DESCANSO'
+    }else if(base.horas[dn]){
+      hObj=base.horas[dn]
 
-    if(esCoyo){
-      inc=sucBaseLower.includes('coyo')||sucBaseLower.includes('hotel')
-    }else if(esJuarez){
-      inc=sucBaseLower.includes('juarez')||sucBaseLower.includes('bucareli')
-    }else if(esTodo){
-      inc=true
+      if(hObj.entrada!=='LIBRE'&&hObj.entrada){
+        const dif=minutos(horaMX())-minutos(hObj.entrada)
+
+        if(dif>TOLERANCIA_MIN){
+          estatus=`RETARDO ${dif}min (Prog ${hObj.entrada})`
+        }else{
+          estatus=`A TIEMPO (Prog ${hObj.entrada})`
+        }
+      }else if(hObj.entrada==='LIBRE'){
+        estatus='LIBRE'
+      }
+    }
+  }
+
+  try{
+    if(!hoy||!hoy[3]){
+      if(dMin>cercana.rEnt){
+        await sock.sendMessage(
+          jid,
+          {text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}`},
+          {quoted:m}
+        )
+        return
+      }
+
+      const h=horaMX()
+      const jTxt=hObj?`${hObj.entrada}${hObj.salida?` - ${hObj.salida}`:''}`:"8h"
+
+      const row=[
+        tel10F,
+        nombre,
+        fLab,
+        h,
+        estatus,
+        '',
+        cercana.nombre,
+        Math.round(dMin).toString(),
+        '',
+        '',
+        calcularHorasTrabajadas(h,""),
+        "0",
+        jTxt
+      ]
+
+      if(idx===-1){
+        await sClient.spreadsheets.values.append({
+          spreadsheetId:SPREADSHEET_ID,
+          range:'Asistencia!A:M',
+          valueInputOption:'USER_ENTERED',
+          requestBody:{values:[row]}
+        })
+      }else{
+        await sClient.spreadsheets.values.update({
+          spreadsheetId:SPREADSHEET_ID,
+          range:`Asistencia!A${idx+1}:M${idx+1}`,
+          valueInputOption:'USER_ENTERED',
+          requestBody:{values:[row]}
+        })
+      }
+
+      await sock.sendMessage(
+        jid,
+        {text:`✅ ${estatus} - ${nombre} en ${cercana.nombre} - ${h}`}
+      )
+
     }else{
-      inc=sucBaseLower.includes(filtro)
+      if(hoy[5]){
+        await sock.sendMessage(jid,{text:`Salida ya registrada`})
+        return
+      }
+
+      if(dMin>cercana.rSal){
+        await sock.sendMessage(
+          jid,
+          {text:`No puedes checar salida a ${Math.round(dMin)}m`},
+          {quoted:m}
+        )
+        return
+      }
+
+      const h=horaMX()
+      const jTxt=hoy[12]||"8h"
+
+      const {trabajadas,extra}=calcularExtra(
+        hoy[3],
+        h,
+        hObj?.entrada||null,
+        hObj?.salida||null
+      )
+
+      await sClient.spreadsheets.values.update({
+        spreadsheetId:SPREADSHEET_ID,
+        range:`Asistencia!F${idx+1}:M${idx+1}`,
+        valueInputOption:'USER_ENTERED',
+        requestBody:{
+          values:[[
+            h,
+            hoy[6]||'',
+            hoy[7]||'',
+            cercana.nombre,
+            Math.round(dMin).toString(),
+            trabajadas,
+            extra,
+            jTxt
+          ]]
+        }
+      })
+
+      await sock.sendMessage(
+        jid,
+        {text:`✅ Salida - ${nombre} en ${cercana.nombre} - ${h}`}
+      )
+    }
+  }catch(e){
+    console.error(e)
+  }
+}
+
+export async function cerrarSalidasPendientes(){
+  const sClient=await sheetsClient()
+  const asis=await getRows('Asistencia!A:M')
+  const baseMap=await getHorarioBaseMap()
+
+  if(!asis.length)return
+
+  const ahora=new Date()
+
+  for(let i=1;i<asis.length;i++){
+    const f=asis[i]
+
+    const tel=(f[0]||'').replace(/\D/g,'').slice(-10)
+    const fecha=(f[2]||'').toString().trim()
+    const entrada=(f[3]||'').toString().trim()
+    const salida=(f[5]||'').toString().trim()
+
+    if(!tel||!fecha||!entrada||salida)continue
+
+    const entradaMatch=entrada.match(/^(\d{1,2}):(\d{2})/)
+    if(!entradaMatch)continue
+
+    const eh=String(entradaMatch[1]).padStart(2,'0')
+    const em=entradaMatch[2]
+
+    const entradaDate=new Date(`${fecha}T${eh}:${em}:00-06:00`)
+
+    if(Number.isNaN(entradaDate.getTime()))continue
+
+    const cierreDate=new Date(
+      entradaDate.getTime()+(CIERRE_AUTO_HORAS*60*60*1000)
+    )
+
+    if(ahora<cierreDate)continue
+
+    const hCierre=horaMX(cierreDate)
+
+    const jornada=(f[12]||'').toString().trim().toLowerCase()
+    const esLibre=jornada.includes('libre')||jornada.includes('flex')
+
+    let trabajadas='0'
+    let extra='0'
+
+    if(!esLibre){
+      const base=baseMap[tel]||null
+      const fe=new Date(fecha+'T12:00:00')
+      const prog=base?.horas?.[fe.getDay()]||null
+
+      if(prog?.entrada==='LIBRE'){
+        trabajadas='0'
+        extra='0'
+      }else{
+        const calc=calcularExtra(
+          entrada,
+          hCierre,
+          prog?.entrada||null,
+          prog?.salida||null
+        )
+
+        trabajadas=calc.trabajadas
+        extra=calc.extra
+      }
     }
 
-    if(!inc)continue
+    await sClient.spreadsheets.values.update({
+      spreadsheetId:SPREADSHEET_ID,
+      range:`Asistencia!F${i+1}:M${i+1}`,
+      valueInputOption:'USER_ENTERED',
+      requestBody:{
+        values:[[
+          hCierre,
+          f[6]||'',
+          f[7]||'',
+          'SIN SALIDA',
+          'AUTO 16H',
+          trabajadas,
+          extra,
+          f[12]||'8h'
+        ]]
+      }
+    })
 
+    console.log(
+      `CIERRE AUTO 16H: ${f[1]||tel} | ${fecha} ${entrada} -> ${hCierre} | ${esLibre?'LIBRE / 0 HORAS':`Trab ${trabajadas} / Extra ${extra}`}`
+    )
+  }
+}
+
+export async function checkNoLlegaron(sock){
+  const hoy=fechaLaboral()
+
+  if(fechaAvisos!==hoy){
+    avisosHoy.clear()
+    fechaAvisos=hoy
+  }
+
+  const ahoraMin=minutos(horaMX())
+  const baseRows=await getRows('Horario_Base!A2:K')
+  const asisRows=await getRows('Asistencia!A2:M')
+
+  const diaNum=new Date(
+    new Date().toLocaleString(
+      'en-US',
+      {timeZone:'America/Mexico_City'}
+    )
+  ).getDay()
+
+  for(const r of baseRows){
     const tel=(r[0]||'').replace(/\D/g,'').slice(-10)
-    const mapa={1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
+
+    if(!tel)continue
+
+    const key=`${hoy}_${tel}`
+
+    if(avisosHoy.has(key))continue
+
+    const mapa={
+      1:r[3],
+      2:r[4],
+      3:r[5],
+      4:r[6],
+      5:r[7],
+      6:r[8],
+      0:r[9]
+    }
+
     const v=(mapa[diaNum]||'').toString().trim()
     const parsed=parseHorarioRango(v)
 
-    if(!parsed)continue
-
-    const esLibre=parsed.entrada==='LIBRE'
-    const horaProg=esLibre?'LIBRE':parsed.entrada
-
-    const registro=asisRows.find(a=>
-      (a[0]||'').replace(/\D/g,'').slice(-10)===tel&&
-      a[2]===fLab
-    )
-
-    if(registro&&registro[3]){
-      const entrada=registro[3]
-      const sucEnt=registro[6]||''
-      const dif=esLibre?0:minutos(entrada)-minutos(horaProg)
-
-      if(esLibre){
-        llego.push(`• ${nombre} - Entró ${entrada} en ${sucEnt} ✅`)
-      }else if(dif>15){
-        retardo.push(`• ${nombre} - [${sucBaseOriginal}] Prog ${horaProg} - Entró ${entrada} - ⏰ ${dif}m tarde - ${sucEnt}`)
-      }else{
-        llego.push(`• ${nombre} - [${sucBaseOriginal}] Prog ${horaProg} - Entró ${entrada} ✅ - ${sucEnt}`)
-      }
-    }else{
-      if(esLibre){
-        if(ahoraMin>=20*60){
-          falta.push(`• ${nombre} - [${sucBaseOriginal}] - ❌ sin llegar`)
-        }
-        continue
-      }
-
-      const dif=ahoraMin-minutos(horaProg)
-
-      if(dif<0){
-        futuro.push(`• ${nombre} - [${sucBaseOriginal}] - Prog ${horaProg}`)
-      }else{
-        falta.push(`• ${nombre} - [${sucBaseOriginal}] - Prog ${horaProg} - ❌ ${dif}m sin llegar`)
-      }
-    }
-  }
-
-  const tituloSucursal=filtroSucursal?filtroSucursal.toUpperCase():'TODO EL PERSONAL'
-
-  const txt=`📍 *ASISTENCIA HOY ${fLab} - ${tituloSucursal}* ${horaMX()}
-
-✅ *A TIEMPO (${llego.length}):*
-${llego.join('\n')||'-'}
-
-⏰ *RETARDOS (${retardo.length}):*
-${retardo.join('\n')||'-'}
-
-❌ *NO HAN LLEGADO (${falta.length}):*
-${falta.join('\n')||'Todos llegaron'}
-
-⏳ *PRÓXIMOS (${futuro.length}):*
-${futuro.join('\n')||'-'}`
-
-  await sock.sendMessage(jid,{text:txt})
-}
-
-export async function generarExcelEmpleado(nombreBuscarRaw,jid,sock,tipo='actual'){
-  const sClient=await sheetsClient()
-  const baseMap=await getHorarioBaseMap()
-
-  const asisRes=await sClient.spreadsheets.values.get({
-    spreadsheetId:SPREADSHEET_ID,
-    range:'Asistencia!A2:M'
-  })
-
-  const filas=asisRes.data.values||[]
-  const buscar=nombreBuscarRaw.toLowerCase().replace(/actual|pasada|pasado|esta semana|hoy/g,'').trim()
-  const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
-
-  const filtradas=filas.filter(f=>{
-    const n=(f[1]||'').toLowerCase()
-    if(!n.includes(buscar))return false
-
-    const fe=parseFechaMX(f[2])
-    return fe&&fe>=lunes&&fe<=domingo
-  })
-
-  const header=["Tel","Nombre","Fecha","Entrada","Estatus Entrada","Salida","Suc Entrada","Dist Entr","Suc Salida","Dist Sal","Horas Trabajadas","Horas Extra","Jornada Programada"]
-
-  const wb=new ExcelJS.Workbook()
-  const ws=wb.addWorksheet('Resumen')
-
-  ws.addRow([`REPORTE ${buscar.toUpperCase()} - ${tipo.toUpperCase()}`]).font={bold:true,size:14}
-  ws.addRow([rangoTxt])
-  ws.addRow([])
-
-  let dias=0,ret=0,min=0,sin=0,horasMin=0,extraMin=0
-
-  filtradas.forEach(f=>{
-    if(f[3])dias++
-
-    const m=(f[4]||'').match(/(\d+)\s*min/)
-    if(m){
-      ret++
-      min+=parseInt(m[1])
-    }
-
-    if(!f[5])sin++
-
-    if(f[3]&&f[5]){
-      const fe=parseFechaMX(f[2])
-      const prog=baseMap[(f[0]||'').replace(/\D/g,'').slice(-10)]?.horas?.[fe.getDay()]
-      const calc=calcularExtra(f[3],f[5],prog?.entrada||null,prog?.salida||null)
-
-      const mt=calc.trabajadas==="8"
-        ?480
-        :(()=>{const[hh,mm]=calc.trabajadas.split(':').map(Number);return hh*60+mm})()
-
-      horasMin+=mt
-      extraMin+=calc.extraMin
-    }
-  })
-
-  ws.addRow(['Nombre','Días','Retardos','Min','Sin salida','Horas Trab','Horas Extra']).font={bold:true}
-
-  ws.addRow([
-    buscar,
-    `${dias} días`,
-    `Ret ${ret} (${min}m)`,
-    sin,
-    `${Math.floor(horasMin/60)}:${String(horasMin%60).padStart(2,'0')}h`,
-    `${Math.floor(extraMin/60)}:${String(extraMin%60).padStart(2,'0')}h`
-  ])
-
-  ws.columns.forEach(c=>c.width=22)
-
-  const ws2=wb.addWorksheet('Detalle')
-  ws2.addRow(header).font={bold:true}
-  filtradas.forEach(f=>ws2.addRow(f))
-  ws2.columns.forEach(c=>c.width=18)
-
-  const fileName=`Reporte_${buscar.replace(/\s+/g,'_')}_${tipo}.xlsx`
-  const fp=path.join(os.tmpdir(),fileName)
-
-  await wb.xlsx.writeFile(fp)
-
-  await sock.sendMessage(jid,{
-    document:fs.readFileSync(fp),
-    mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    fileName
-  })
-
-  fs.unlinkSync(fp)
-}
-
-export async function resumenEmpleado(nombreBuscar,jidRespuesta,sock,tipo='actual'){
-  const sClient=await sheetsClient()
-
-  const [asisRes,baseMap]=await Promise.all([
-    sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A2:M'}),
-    getHorarioBaseMap()
-  ])
-
-  const filas=asisRes.data.values||[]
-  const buscar=nombreBuscar.toLowerCase().replace(/actual|pasada|pasado|esta semana|hoy/g,'').trim()
-  const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
-
-  const info=baseMap[buscar]||Object.values(baseMap).find(v=>(v.nombreOriginal||'').toLowerCase().includes(buscar))||{descansos:new Set(),horas:{}}
-
-  let diasSem=0,retSem=0,minSem=0,detalle=[],sin=[],horasMin=0,extraTotal=0
-  const diasNom=['Dom','Lun','Mar','Mie','Jue','Vie','Sab']
-
-  for(const f of filas){
-    const n=(f[1]||'').toLowerCase()
-    if(!n.includes(buscar))continue
-
-    const fe=parseFechaMX(f[2])
-    if(!fe)continue
-
-    fe.setHours(0,0,0,0)
-
-    if(fe<lunes||fe>domingo)continue
-
-    if(f[3]){
-      diasSem++
-
-      const ret=(f[4]||'').match(/(\d+)\s*min/)
-
-      if(ret){
-        retSem++
-        minSem+=parseInt(ret[1])
-      }
-
-      if(!f[5])sin.push(f[2])
-
-      const progDia=info.horas[fe.getDay()]
-
-      if(f[3]&&f[5]&&progDia){
-        const calc=calcularExtra(f[3],f[5],progDia.entrada,progDia.salida)
-        const mt=calc.trabajadas==="8"
-          ?480
-          :(()=>{const[hh,mm]=calc.trabajadas.split(':').map(Number);return hh*60+mm})()
-
-        horasMin+=mt
-        extraTotal+=calc.extraMin
-      }
-
-      detalle.push(`• ${f[2]}: Ent ${f[3]} | Sal ${f[5]||'SIN'} | Trab ${f[10]||''} | Extra ${f[11]||'0'} | ${f[12]||''}`)
-    }
-  }
-
-  let esperados=0
-
-  for(let d=new Date(lunes);d<=domingo;d.setDate(d.getDate()+1)){
-    if(!info.descansos.has(d.getDay()))esperados++
-  }
-
-  const faltas=Math.max(0,esperados-diasSem)
-  const descTxt=[...info.descansos].map(d=>diasNom[d]).join(', ')||'ninguno'
-
-  const txt=`📊 *${buscar.toUpperCase()}* - Desc: ${descTxt}
-${rangoTxt}
-
-*SEMANA ${tipo.toUpperCase()}*
-- Trabajados: ${diasSem}/${esperados} - Faltas: ${faltas}
-- Retardos: ${retSem} (${minSem} min)
-- Sin salida: ${sin.length}
-- Horas Trab: ${Math.floor(horasMin/60)}:${String(horasMin%60).padStart(2,'0')}h
-- Horas Extra: ${Math.floor(extraTotal/60)}:${String(extraTotal%60).padStart(2,'0')}h
-
-Detalle:
-${detalle.join('\n')||'Sin registros'}`
-
-  await sock.sendMessage(jidRespuesta,{text:txt})
-
-  if(diasSem>0){
-    await generarExcelEmpleado(buscar,jidRespuesta,sock,tipo)
-  }
-}
-
-export async function reporteSucursal(filtroSucursal,jid,sock,tipo='pasada'){
-  const [asisRes,empRows]=await Promise.all([
-    (await sheetsClient()).spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A2:M'}),
-    getRows('Empleados!A:K')
-  ])
-
-  const filas=asisRes.data.values||[]
-  const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
-  const filtro=filtroSucursal.toLowerCase()
-  const esCoyo=filtro.includes('coyo')||filtro.includes('hotel')
-  const esJuarez=filtro.includes('juarez')||filtro.includes('bucareli')
-  const baseMap=await getHorarioBaseMap()
-  const telToNombre={}
-
-  empRows.forEach(r=>{
-    const tel=(r[0]||'').replace(/\D/g,'').slice(-10)
-    if(tel)telToNombre[tel]=(r[3]||r[1]||'').trim()
-  })
-
-  let datos={}
-
-  for(const f of filas){
-    const fe=parseFechaMX(f[2])
-    if(!fe||fe<lunes||fe>domingo)continue
-
-    const suc=((f[6]||'')+' '+(f[8]||'')).toLowerCase()
-    let inc=false
-
-    if(esCoyo)inc=suc.includes('coyo')||suc.includes('hotel')
-    else if(esJuarez)inc=suc.includes('juarez')||suc.includes('bucareli')
-    else inc=suc.includes(filtro)
-
-    if(!inc)continue
-
-    const tel=(f[0]||'').replace(/\D/g,'').slice(-10)
-    const nombreOficial=telToNombre[tel]||(f[1]||'').trim()||'Desconocido'
-    const key=tel||normaliza(nombreOficial)
-
-    if(!datos[key]){
-      datos[key]={
-        nombre:nombreOficial,
-        dias:0,
-        ret:0,
-        min:0,
-        sin:0,
-        horasMin:0,
-        extraMin:0
-      }
-    }
-
-    if(f[3]){
-      datos[key].dias++
-
-      const m=(f[4]||'').match(/(\d+)\s*min/)
-
-      if(m){
-        datos[key].ret++
-        datos[key].min+=parseInt(m[1])
-      }
-
-      if(!f[5])datos[key].sin++
-
-      if(f[3]&&f[5]){
-        const feDia=parseFechaMX(f[2])
-        const info=baseMap[tel]||null
-        const prog=info?.horas?.[feDia?feDia.getDay():1]||null
-        const calc=calcularExtra(f[3],f[5],prog?.entrada||null,prog?.salida||null)
-
-        const mt=calc.trabajadas==="8"
-          ?480
-          :(()=>{const[hh,mm]=calc.trabajadas.split(':').map(Number);return hh*60+mm})()
-
-        datos[key].horasMin+=mt
-        datos[key].extraMin+=calc.extraMin
-      }
-    }
-  }
-
-  let txt=`📊 *REPORTE ${filtroSucursal.toUpperCase()}* - ${tipo}
-${rangoTxt}
-`
-
-  if(!Object.keys(datos).length){
-    txt+='Sin registros\n'
-  }else{
-    for(const k in datos){
-      const d=datos[k]
-
-      txt+=`*${d.nombre}*: ${d.dias} días | Ret ${d.ret} (${d.min}m) | Trab: ${Math.floor(d.horasMin/60)}:${String(d.horasMin%60).padStart(2,'0')}h | Extra: ${Math.floor(d.extraMin/60)}:${String(d.extraMin%60).padStart(2,'0')}h | Sin salida: ${d.sin}\n\n`
-    }
-  }
-
-  await sock.sendMessage(jid,{text:txt})
-}
-
-export async function generarExcelSemanaYEnviar(filtroSucursal,jid,sock,tipo='pasada'){
-  const sClient=await sheetsClient()
-  const baseMap=await getHorarioBaseMap()
-
-  const [asisRes,empRows]=await Promise.all([
-    sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A2:M'}),
-    getRows('Empleados!A:K')
-  ])
-
-  const filas=asisRes.data.values||[]
-  const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
-  const esCoyo=filtroSucursal.toLowerCase().includes('coyo')
-  const esJuarez=filtroSucursal.toLowerCase().includes('juarez')||filtroSucursal.toLowerCase().includes('bucareli')
-  const telToNombre={}
-
-  empRows.forEach(r=>{
-    const tel=(r[0]||'').replace(/\D/g,'').slice(-10)
-    if(tel)telToNombre[tel]=(r[3]||r[1]||'').trim()
-  })
-
-  const filtradas=filas.filter(f=>{
-    const fe=parseFechaMX(f[2])
-    if(!fe||fe<lunes||fe>domingo)return false
-
-    const suc=((f[6]||'')+' '+(f[8]||'')).toLowerCase()
-
-    if(esCoyo)return suc.includes('coyo')||suc.includes('hotel')
-    if(esJuarez)return suc.includes('juarez')||suc.includes('bucareli')
-
-    return suc.includes(filtroSucursal.toLowerCase())
-  })
-
-  let datos={}
-
-  for(const f of filtradas){
-    const tel=(f[0]||'').replace(/\D/g,'').slice(-10)
-    const nombreOficial=telToNombre[tel]||(f[1]||'Desconocido').trim()
-    const key=tel||normaliza(nombreOficial)
-
-    if(!datos[key]){
-      datos[key]={
-        nombre:nombreOficial,
-        dias:0,
-        ret:0,
-        min:0,
-        sin:0,
-        horasMin:0,
-        extraMin:0,
-        tel
-      }
-    }
-
-    const fe=parseFechaMX(f[2])
-
-    if(fe){
-      const prog=baseMap[tel]?.horas?.[fe.getDay()]
-
-      if(f[3]&&f[5]){
-        const calc=calcularExtra(f[3],f[5],prog?.entrada,prog?.salida)
-
-        const mt=calc.trabajadas==="8"
-          ?480
-          :(()=>{const[hh,mm]=calc.trabajadas.split(':').map(Number);return hh*60+mm})()
-
-        datos[key].horasMin+=mt
-        datos[key].extraMin+=calc.extraMin
-      }
-    }
-
-    datos[key].dias++
-
-    const m=(f[4]||'').match(/(\d+)\s*min/)
-
-    if(m){
-      datos[key].ret++
-      datos[key].min+=parseInt(m[1])
-    }
-
-    if(!f[5])datos[key].sin++
-  }
-
-  const header=["Tel","Nombre","Fecha","Entrada","Estatus Entrada","Salida","Suc Entrada","Dist Entr","Suc Salida","Dist Sal","Horas Trabajadas","Horas Extra","Jornada"]
-
-  const wb=new ExcelJS.Workbook()
-  const ws=wb.addWorksheet('Resumen')
-
-  ws.addRow([`REPORTE ${filtroSucursal.toUpperCase()} - ${tipo}`]).font={bold:true,size:14}
-  ws.addRow([rangoTxt])
-  ws.addRow([])
-
-  ws.addRow(['Nombre','Tel','Días','Retardos','Min','Sin salida','Horas Trab','Horas Extra']).font={bold:true}
-
-  for(const k of Object.keys(datos)){
-    const d=datos[k]
-
-    ws.addRow([
-      d.nombre,
-      d.tel,
-      `${d.dias} días`,
-      `Ret ${d.ret} (${d.min}m)`,
-      d.sin,
-      `${Math.floor(d.horasMin/60)}:${String(d.horasMin%60).padStart(2,'0')}h`,
-      `${Math.floor(d.extraMin/60)}:${String(d.extraMin%60).padStart(2,'0')}h`
-    ])
-  }
-
-  ws.columns.forEach(c=>c.width=22)
-
-  const ws2=wb.addWorksheet('Detalle')
-  ws2.addRow(header).font={bold:true}
-  filtradas.forEach(f=>ws2.addRow(f))
-  ws2.columns.forEach(c=>c.width=18)
-
-  const fileName=`Reporte_${filtroSucursal}_${tipo}_${lunes.toISOString().split('T')[0]}.xlsx`
-  const fp=path.join(os.tmpdir(),fileName)
-
-  await wb.xlsx.writeFile(fp)
-
-  await sock.sendMessage(jid,{
-    document:fs.readFileSync(fp),
-    mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    fileName
-  })
-
-  fs.unlinkSync(fp)
-}
-
-function periodoDesdeTexto(low){
-  if(/\b(pasada|pasado)\b/.test(low))return'pasada'
-  if(/\b(actual|esta|hoy)\b/.test(low))return'actual'
-  return null
-}
-
-function limpiarPeriodo(s){
-  return s
-    .replace(/\b(pasada|pasado|actual|esta semana|hoy)\b/gi,'')
-    .replace(/\s+/g,' ')
-    .trim()
-}
-
-async function buscarEmpleadosPorNombreCorto(buscar,filtroGrupo){
-  const empRows=await getRows('Empleados!A:K')
-  const b=normaliza(buscar)
-  const candidatos=[]
-
-  for(const r of empRows.slice(1)){
-    const corto=(r[1]||'').trim()
-    const completo=(r[3]||'').trim()
-    const suc=r[2]||''
-
-    if(!corto||!sucursalCoincideConFiltro(suc,filtroGrupo))continue
-
-    const n=normaliza(corto)
-
-    if(n===b||n.startsWith(b)||n.includes(b)){
-      candidatos.push({r,corto,completo,suc})
-    }
-  }
-
-  return candidatos
-}
-
-async function iniciarReporteEmpleado(buscar,jid,sock,tipo=null,filtroGrupo=null){
-  const candidatos=await buscarEmpleadosPorNombreCorto(buscar,filtroGrupo)
-
-  if(!candidatos.length){
-    await sock.sendMessage(jid,{
-      text:`No encontré un empleado con Nombre Corto "${buscar}".`
-    })
-    return true
-  }
-
-  if(candidatos.length>1){
-    pendientesReporte.set(jid,{
-      tipo:'empleado-seleccion',
-      buscar,
-      tipoPeriodo:tipo,
-      candidatos
-    })
-
-    const lista=candidatos.map((x,i)=>`${i+1}️⃣ ${x.corto} — ${x.completo} — ${x.suc}`).join('\n')
-
-    await sock.sendMessage(jid,{
-      text:`Encontré más de una persona con "${buscar}":
-
-${lista}
-
-Escribe el número de la persona.`
-    })
-
-    return true
-  }
-
-  const emp=candidatos[0]
-
-  if(!tipo){
-    pendientesReporte.set(jid,{
-      tipo:'empleado-periodo',
-      empleado:emp
-    })
-
-    await sock.sendMessage(jid,{
-      text:`Encontré a *${emp.corto}* (${emp.completo}).
-
-¿Qué reporte quieres?
-1️⃣ Actual
-2️⃣ Pasada`
-    })
-
-    return true
-  }
-
-  await resumenEmpleado(emp.completo,jid,sock,tipo)
-  return true
-}
-
-function formatoInfoEmpleado(r){
-  const tel=r[0]||'-'
-  const suc=r[2]||'-'
-  const nombre=r[3]||r[1]||'-'
-  const puesto=r[4]||''
-  const ingreso=r[5]||''
-  const contacto=r[6]||''
-  const telEmerg=r[7]||''
-  const curp=r[8]||''
-  const nss=r[9]||''
-  const status=r[16]||''
-  const baja=r[17]||''
-  const motivoBaja=r[18]||''
-  const reingreso=r[19]||''
-
-  const esBaja=
-    normaliza(status).includes('baja')||
-    normaliza(status).includes('inactivo')||
-    !!baja||
-    !!motivoBaja
-
-  let txt=`📋 *${nombre}*`
-
-  if(esBaja){
-    if(ingreso)txt+=`\n📅 Ingreso: ${ingreso}`
-    if(baja)txt+=`\n🔴 Baja: ${baja}`
-    if(motivoBaja)txt+=`\n📝 Motivo: ${motivoBaja}`
-    if(reingreso)txt+=`\n🔄 Reingreso: ${reingreso}`
-  }else{
-    txt+=`\n📍 ${suc}`
-    txt+=`\n📱 ${tel}`
-
-    if(puesto)txt+=`\n💼 Puesto: ${puesto}`
-    if(nss)txt+=`\n🧾 NSS: ${nss}`
-    if(curp)txt+=`\n🪪 CURP: ${curp}`
-    if(contacto)txt+=`\n🚨 Contacto de emergencia: ${contacto}`
-    if(telEmerg)txt+=`\n📞 Tel. emergencia: ${telEmerg}`
-  }
-
-  return txt
-}
-
-async function buscarInfoEmpleados(buscar,filtroGrupo){
-  const empRows=await getRows('Empleados!A:T')
-  const b=normaliza(buscar)
-  const candidatos=[]
-
-  for(const r of empRows.slice(1)){
-    const corto=r[1]||''
-    const completo=r[3]||''
-    const suc=r[2]||''
-
-    if(!sucursalCoincideConFiltro(suc,filtroGrupo))continue
-
-    const s=scoreEmpleado(corto,completo,b)
-
-    if(s>=0)candidatos.push({r,s})
-  }
-
-  candidatos.sort((a,b)=>b.s-a.s)
-
-  return candidatos
-}
-
-function obtenerDatosBancarios(r){
-  const banco=(r[12]||'').toString().trim()
-  const clabe=(r[13]||'').toString().trim()
-  const cuenta=(r[14]||'').toString().trim()
-  const tarjeta=(r[15]||'').toString().trim()
-  const nombre=r[3]||r[1]||'-'
-
-  let txt=`🏦 *${nombre}*`
-
-  if(clabe){
-    if(banco)txt+=`\nBanco: ${banco}`
-    txt+=`\nCLABE: ${clabe}`
-  }else if(cuenta){
-    if(banco)txt+=`\nBanco: ${banco}`
-    txt+=`\nCuenta: ${cuenta}`
-  }else if(tarjeta){
-    if(banco)txt+=`\nBanco: ${banco}`
-    txt+=`\nTarjeta: ${tarjeta}`
-  }else{
-    txt+=`\nSin datos bancarios registrados.`
-  }
-
-  return txt
-}
-
-async function procesarInfo(buscar,jid,sock,filtroGrupo){
-  const candidatos=await buscarInfoEmpleados(buscar,filtroGrupo)
-
-  if(!candidatos.length){
-    await sock.sendMessage(jid,{
-      text:filtroGrupo
-        ? 'No se encontró empleado en esta sucursal.'
-        : `No encontré a "${buscar}".`
-    })
-    return true
-  }
-
-  if(candidatos.length>1){
-    pendientesReporte.set(jid,{
-      tipo:'info-seleccion',
-      candidatos
-    })
-
-    const lista=candidatos
-      .map((x,i)=>`${i+1}️⃣ ${x.r[3]||x.r[1]||'-'} — ${x.r[2]||'-'}`)
-      .join('\n')
-
-    await sock.sendMessage(jid,{
-      text:`Encontré varias personas que coinciden con "${buscar}":
-
-${lista}
-
-Escribe el número de la persona.`
-    })
-
-    return true
-  }
-
-  await sock.sendMessage(jid,{
-    text:formatoInfoEmpleado(candidatos[0].r)
-  })
-
-  return true
-}
-
-async function procesarDatosBancarios(buscar,jid,sock,filtroGrupo,comando){
-  const candidatos=await buscarInfoEmpleados(buscar,filtroGrupo)
-
-  if(!candidatos.length){
-    await sock.sendMessage(jid,{
-      text:filtroGrupo
-        ? 'No se encontró empleado en esta sucursal.'
-        : `No encontré a "${buscar}".`
-    })
-    return true
-  }
-
-  if(candidatos.length>1){
-    pendientesReporte.set(jid,{
-      tipo:'cuenta-seleccion',
-      candidatos,
-      comando
-    })
-
-    const lista=candidatos
-      .map((x,i)=>`${i+1}️⃣ ${x.r[3]||x.r[1]||'-'} — ${x.r[2]||'-'}`)
-      .join('\n')
-
-    await sock.sendMessage(jid,{
-      text:`Encontré varias personas que coinciden con "${buscar}":
-
-${lista}
-
-Escribe el número de la persona.`
-    })
-
-    return true
-  }
-
-  const r=candidatos[0].r
-
-  await sock.sendMessage(jid,{
-    text:obtenerDatosBancarios(r)
-  })
-
-  return true
-}
-
-async function procesarPendienteReporte(texto,jid,sock){
-  const p=pendientesReporte.get(jid)
-
-  if(!p)return false
-
-  const low=normaliza(texto).trim()
-
-  if(p.tipo==='info-seleccion'){
-    const n=parseInt(low)
-
-    if(!n||n<1||n>p.candidatos.length){
-      await sock.sendMessage(jid,{
-        text:`Escribe un número del 1 al ${p.candidatos.length}.`
-      })
-      return true
-    }
-
-    pendientesReporte.delete(jid)
-
-    await sock.sendMessage(jid,{
-      text:formatoInfoEmpleado(p.candidatos[n-1].r)
-    })
-
-    return true
-  }
-
-  if(p.tipo==='cuenta-seleccion'){
-    const n=parseInt(low)
-
-    if(!n||n<1||n>p.candidatos.length){
-      await sock.sendMessage(jid,{
-        text:`Escribe un número del 1 al ${p.candidatos.length}.`
-      })
-      return true
-    }
-
-    const r=p.candidatos[n-1].r
-
-    pendientesReporte.delete(jid)
-
-    await sock.sendMessage(jid,{
-      text:obtenerDatosBancarios(r)
-    })
-
-    return true
-  }
-
-  if(p.tipo==='empleado-seleccion'){
-    const n=parseInt(low)
-
-    if(!n||n<1||n>p.candidatos.length){
-      await sock.sendMessage(jid,{
-        text:`Escribe un número del 1 al ${p.candidatos.length}.`
-      })
-      return true
-    }
-
-    const emp=p.candidatos[n-1]
-
-    if(p.tipoPeriodo){
-      pendientesReporte.delete(jid)
-      await resumenEmpleado(emp.completo,jid,sock,p.tipoPeriodo)
-      return true
-    }
-
-    pendientesReporte.set(jid,{
-      tipo:'empleado-periodo',
-      empleado:emp
-    })
-
-    await sock.sendMessage(jid,{
-      text:`Seleccionaste *${emp.corto}* (${emp.completo}).
-
-¿Qué reporte quieres?
-1️⃣ Actual
-2️⃣ Pasada`
-    })
-
-    return true
-  }
-
-  if(p.tipo==='empleado-periodo'){
-    let periodo=null
-
-    if(low==='1'||low.includes('actual'))periodo='actual'
-    else if(low==='2'||low.includes('pasada')||low.includes('pasado'))periodo='pasada'
-
-    if(!periodo){
-      await sock.sendMessage(jid,{
-        text:'Escribe *1* para Actual o *2* para Pasada.'
-      })
-      return true
-    }
-
-    pendientesReporte.delete(jid)
-
-    await resumenEmpleado(p.empleado.completo,jid,sock,periodo)
-    return true
-  }
-
-  if(p.tipo==='sucursal-periodo'){
-    let periodo=null
-
-    if(low==='1'||low.includes('actual'))periodo='actual'
-    else if(low==='2'||low.includes('pasada')||low.includes('pasado'))periodo='pasada'
-
-    if(!periodo){
-      await sock.sendMessage(jid,{
-        text:'Escribe *1* para Actual o *2* para Pasada.'
-      })
-      return true
-    }
-
-    pendientesReporte.delete(jid)
-
-    await reporteSucursal(p.sucursal,jid,sock,periodo)
-    await generarExcelSemanaYEnviar(p.sucursal,jid,sock,periodo)
-
-    return true
-  }
-
-  return false
-}
-
-export async function handleReportes({texto,jid,sock,filtroGrupo}){
-  const textoTrim=texto.trim()
-  const low=textoTrim.toLowerCase()
-
-  if(await procesarPendienteReporte(texto,jid,sock))return true
-
-  /*
-   * DATOS BANCARIOS
-   * banco / clabe / clave / cuenta
-   * Todos usan prioridad:
-   * CLABE -> Cuenta -> Tarjeta
-   */
-  const matchBancario=textoTrim.match(/^(datos bancarios|cuenta bancaria|cuenta empleado|cuenta|banco|clave|clabe)\s+(.+)$/i)
-
-  if(matchBancario){
-    const comando=normaliza(matchBancario[1])
-    const buscar=matchBancario[2].trim()
-
-    if(!buscar){
-      await sock.sendMessage(jid,{
-        text:'Escribe: cuenta daniel, banco daniel o clabe daniel'
-      })
-      return true
-    }
-
-    await procesarDatosBancarios(
-      buscar,
-      jid,
-      sock,
-      filtroGrupo,
-      comando
-    )
-
-    return true
-  }
-
-  if(low.startsWith('asistencia hoy')){
-    let suc=low.replace('asistencia hoy','').trim()
-
-    if(filtroGrupo){
-      if(suc){
-        const pedidoCoyo=suc.includes('coyo')||suc.includes('hotel')
-        const pedidoBuc=suc.includes('bucareli')||suc.includes('juarez')
-
-        if(
-          (filtroGrupo==='coyoacan'&&!pedidoCoyo)||
-          (filtroGrupo==='bucareli'&&!pedidoBuc)
-        ){
-          suc=filtroGrupo
-        }else{
-          suc=pedidoCoyo?'coyoacan':'bucareli'
-        }
-      }else{
-        suc=filtroGrupo
-      }
-    }else{
-      suc=suc||null
-    }
-
-    await asistenciaHoy(suc,jid,sock)
-    return true
-  }
-
-  if(low.startsWith('resumen ')){
-    const tipo=periodoDesdeTexto(low)||'actual'
-    let limpio=limpiarPeriodo(textoTrim.slice(8).trim())
-
     if(
-      limpio.includes('bucareli')||
-      limpio.includes('juarez')||
-      limpio.includes('coyo')||
-      limpio.includes('hotel')
+      !parsed||
+      parsed.entrada==='LIBRE'||
+      !parsed.entrada
     ){
-      let suc='coyoacan'
-
-      if(limpio.includes('juarez')||limpio.includes('bucareli')){
-        suc='juarez'
-      }
-
-      await reporteSucursal(suc,jid,sock,tipo)
-      await generarExcelSemanaYEnviar(suc,jid,sock,tipo)
-      return true
+      continue
     }
 
-    if(!limpio){
-      await sock.sendMessage(jid,{
-        text:'Escribe: resumen [nombre] pasada o actual'
-      })
-      return true
-    }
+    const dif=ahoraMin-minutos(parsed.entrada)
 
-    await resumenEmpleado(limpio,jid,sock,tipo)
-    return true
-  }
+    if(dif<AVISO_FALTA_MIN)continue
 
-  if(/^(reporte|checador|reporte x unidad)/i.test(textoTrim)){
-    const contenido=textoTrim.replace(/^(reporte|checador|reporte x unidad)\s*/i,'').trim()
-    const limpio=limpiarPeriodo(contenido)
-    const tipo=periodoDesdeTexto(low)
-
-    if(low.includes('x unidad')||low.includes('por unidad')){
-      const periodo=tipo||'pasada'
-
-      if(!filtroGrupo){
-        await reporteSucursal('coyoacan',jid,sock,periodo)
-        await generarExcelSemanaYEnviar('coyoacan',jid,sock,periodo)
-
-        await reporteSucursal('juarez',jid,sock,periodo)
-        await generarExcelSemanaYEnviar('juarez',jid,sock,periodo)
-      }else{
-        await reporteSucursal(filtroGrupo,jid,sock,periodo)
-        await generarExcelSemanaYEnviar(filtroGrupo,jid,sock,periodo)
-      }
-
-      return true
-    }
-
-    const esCoyo=/\b(coyoacan|coyoacán)\b/i.test(limpio)
-    const esJuarez=/\b(juarez|juárez|bucareli)\b/i.test(limpio)
-    const esHotel=/\bhotel\b/i.test(limpio)
-
-    if(esCoyo||esJuarez||esHotel){
-      const suc=esJuarez?'juarez':esHotel?'hotel':'coyoacan'
-
-      if(!tipo){
-        pendientesReporte.set(jid,{
-          tipo:'sucursal-periodo',
-          sucursal:suc
-        })
-
-        await sock.sendMessage(jid,{
-          text:`📊 *Reporte ${suc==='juarez'?'Bucareli':suc==='hotel'?'Hotel':'Coyoacán'}*
-
-¿Qué periodo quieres?
-1️⃣ Actual
-2️⃣ Pasada`
-        })
-
-        return true
-      }
-
-      await reporteSucursal(suc,jid,sock,tipo)
-      await generarExcelSemanaYEnviar(suc,jid,sock,tipo)
-
-      return true
-    }
-
-    if(!limpio){
-      await sock.sendMessage(jid,{
-        text:'Escribe: reporte Nico o reporte Coyoacán pasada'
-      })
-      return true
-    }
-
-    await iniciarReporteEmpleado(
-      limpio,
-      jid,
-      sock,
-      tipo,
-      filtroGrupo
+    const registro=asisRows.find(
+      a=>
+        (a[0]||'').replace(/\D/g,'').slice(-10)===tel&&
+        a[2]===hoy&&
+        a[3]
     )
 
-    return true
-  }
+    if(!registro){
+      avisosHoy.add(key)
 
-  if(/^(numero|número|num|tel|telefono|teléfono|info|ficha|datos|dato)\s+(.+)$/i.test(textoTrim)){
-    const buscar=textoTrim
-      .replace(/^(numero|número|num|tel|telefono|teléfono|info|ficha|datos|dato)\s+/i,'')
-      .trim()
+      const nombre=r[1]||tel
+      const sucId=(r[2]||'').toLowerCase()
 
-    if(!buscar){
-      await sock.sendMessage(jid,{
-        text:'Escribe: info daniel'
-      })
-      return true
+      let grupoAviso=null
+
+      if(
+        sucId.includes('coyo')||
+        sucId.includes('hotel')||
+        sucId.includes('trinidad')
+      ){
+        grupoAviso=GRUPO_CHECADOR_COYOACAN_ID
+      }else{
+        grupoAviso=GRUPO_CHECADOR_BUCARELI_ID
+      }
+
+      if(grupoAviso){
+        try{
+          await sock.sendMessage(
+            grupoAviso,
+            {
+              text:
+                `⚠️ NO HA LLEGADO - ${nombre} - Prog ${parsed.entrada} - ${dif}min tarde - [${r[2]}]`
+            }
+          )
+        }catch{}
+      }
     }
-
-    await procesarInfo(buscar,jid,sock,filtroGrupo)
-    return true
   }
-
-  return false
 }
