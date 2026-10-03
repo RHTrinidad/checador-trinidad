@@ -15,7 +15,7 @@
 // 8. Procesar compras.
 // 9. Ejecutar periódicamente el aviso de empleados
 //    que no han llegado.
-// ============================================================
+// ===========================================================
 
 
 import makeWASocket, {
