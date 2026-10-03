@@ -1,20 +1,6 @@
-import {
-  SUCURSALES,
-  GRUPO_CHECADOR_COYOACAN_ID,
-  GRUPO_CHECADOR_BUCARELI_ID,
-  SPREADSHEET_ID
-} from './config.js'
-import {
-  distM,
-  fechaLaboral,
-  horaMX,
-  minutos,
-  normaliza,
-  calcularHorasTrabajadas,
-  calcularExtra,
-  parseHorarioRango
-} from './utils.js'
-import { getRows, sheetsClient, getHorarioBaseMap } from './sheets.js'
+import { SUCURSALES, GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, SPREADSHEET_ID } from './config.js'
+import { distM, fechaLaboral, horaMX, minutos, normaliza, calcularHorasTrabajadas, calcularExtra, parseHorarioRango } from './utils.js'
+import { getRows, sheetsClient } from './sheets.js'
 
 const TOLERANCIA_MIN = 15
 const AVISO_FALTA_MIN = 20
@@ -22,31 +8,28 @@ const CIERRE_AUTO_HORAS = 16
 
 let avisosHoy = new Set()
 let fechaAvisos = ''
+let ultimoRegistroDescansos = ''
 
-function esLibre(jornada){
-  return /libre|flex/i.test(String(jornada || ''))
+function esDescanso(v){
+  const s=(v||'').toString().trim().toLowerCase()
+  return s.includes('descanso')
 }
 
-function fechaHoraMXDesdeFechaHora(fecha, hora){
-  const [hh, mm, ss] = String(hora || '00:00:00').split(':').map(Number)
-  const d = new Date(`${fecha}T${String(hh || 0).padStart(2,'0')}:${String(mm || 0).padStart(2,'0')}:${String(ss || 0).padStart(2,'0')}`)
-  return d
+function diaMexico(){
+  return new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).getDay()
 }
 
-function formatearHora(d){
-  return d.toLocaleTimeString('es-MX',{
-    hour12:false,
-    timeZone:'America/Mexico_City'
-  })
-}
-
-function minutosEntreFechas(a,b){
-  return Math.floor((b.getTime()-a.getTime())/60000)
-}
-
-function esSinSalida(row){
-  return String(row?.[8] || '').toUpperCase().includes('SIN SALIDA') ||
-         String(row?.[9] || '').toUpperCase().includes('AUTO 16H')
+function horarioDelDia(r,dia){
+  const mapa={
+    1:r[3],
+    2:r[4],
+    3:r[5],
+    4:r[6],
+    5:r[7],
+    6:r[8],
+    0:r[9]
+  }
+  return (mapa[dia]||'').toString().trim()
 }
 
 export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
@@ -76,10 +59,11 @@ export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
       r[0] &&
       r[0].replace(/\D/g,'').slice(-10)===tel10
     )
-    if(i>-1) emp=empRows[i]
+
+    if(i>-1)emp=empRows[i]
   }
 
-  if(!emp && rawLid.includes('@lid')){
+  if(!emp&&rawLid.includes('@lid')){
     const i=empRows.findIndex((r,idx)=>
       idx>0 &&
       getLid(r)===rawLid
@@ -96,6 +80,7 @@ export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
   const tel10F=telF.slice(-10)||tel10
 
   const fLab=fechaLaboral()
+
   const asis=await getRows('Asistencia!A:M')
 
   const idx=asis.findIndex((r,i)=>
@@ -105,50 +90,51 @@ export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
     r[2]===fLab
   )
 
-  const hoy=idx>-1?asis[idx]:null
+  let hoy=idx>-1?asis[idx]:null
 
   const sClient=await sheetsClient()
-  const baseMap=await getHorarioBaseMap()
-  const base=
-    baseMap[tel10F]||
-    baseMap[normaliza(nombre).split(' ')[0]]||
-    null
+
+  const baseRows=await getRows('Horario_Base!A2:K')
+
+  const baseRow=baseRows.find(r=>
+    (r[0]||'').replace(/\D/g,'').slice(-10)===tel10F
+  )
+
+  const dia=diaMexico()
+  const horario=baseRow?horarioDelDia(baseRow,dia):''
+  const esDesc=esDescanso(horario)
+
+  let hObj=null
+
+  if(!esDesc){
+    const parsed=parseHorarioRango(horario)
+
+    if(parsed&&parsed.entrada!=='LIBRE'&&parsed.entrada){
+      hObj=parsed
+    }
+  }
 
   let estatus='A TIEMPO'
-  let hObj=null
-  let esRet=false
-  let minRet=0
 
-  if(base){
-    const fe=new Date(fLab+'T12:00:00')
-    const dn=fe.getDay()
+  if(esDesc){
+    estatus='TRABAJO EN DESCANSO'
+  }else if(hObj?.entrada){
+    const dif=minutos(horaMX())-minutos(hObj.entrada)
 
-    if(base.descansos.has(dn)){
-      estatus='DESCANSO'
-    }else if(base.horas[dn]){
-      hObj=base.horas[dn]
-
-      if(hObj.entrada==='LIBRE'){
-        estatus='LIBRE'
-      }else if(hObj.entrada){
-        const dif=minutos(horaMX())-minutos(hObj.entrada)
-
-        if(dif>TOLERANCIA_MIN){
-          estatus=`RETARDO ${dif}min (Prog ${hObj.entrada})`
-          esRet=true
-          minRet=dif
-        }else{
-          estatus=`A TIEMPO (Prog ${hObj.entrada})`
-        }
-      }
+    if(dif>TOLERANCIA_MIN){
+      estatus=`RETARDO ${dif}min (Prog ${hObj.entrada})`
+    }else{
+      estatus=`A TIEMPO (Prog ${hObj.entrada})`
     }
   }
 
   try{
-    // =========================
-    // ENTRADA
-    // =========================
-    if(!hoy || !hoy[3]){
+
+    // ==============================
+    // PRIMER REGISTRO / ENTRADA
+    // ==============================
+
+    if(!hoy||(!hoy[3]&&String(hoy[3]||'').toUpperCase()!=='DESCANSO')){
 
       if(dMin>cercana.rEnt){
         await sock.sendMessage(
@@ -161,10 +147,60 @@ export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
 
       const h=horaMX()
 
-      const jTxt=
-        hObj
-          ? `${hObj.entrada}${hObj.salida?` - ${hObj.salida}`:''}`
-          : '8h'
+      // ==============================
+      // TRABAJO EN DÍA DE DESCANSO
+      // ==============================
+
+      if(esDesc){
+
+        const jTxt='DESCANSO'
+
+        const row=[
+          tel10F,
+          nombre,
+          fLab,
+          h,
+          'TRABAJO EN DESCANSO',
+          '',
+          cercana.nombre,
+          Math.round(dMin).toString(),
+          '',
+          '',
+          '0',
+          '0',
+          jTxt
+        ]
+
+        if(idx===-1){
+          await sClient.spreadsheets.values.append({
+            spreadsheetId:SPREADSHEET_ID,
+            range:'Asistencia!A:M',
+            valueInputOption:'USER_ENTERED',
+            requestBody:{values:[row]}
+          })
+        }else{
+          await sClient.spreadsheets.values.update({
+            spreadsheetId:SPREADSHEET_ID,
+            range:`Asistencia!A${idx+1}:M${idx+1}`,
+            valueInputOption:'USER_ENTERED',
+            requestBody:{values:[row]}
+          })
+        }
+
+        await sock.sendMessage(jid,{
+          text:`✅ TRABAJO EN DESCANSO - ${nombre} en ${cercana.nombre} - ${h}`
+        })
+
+        return
+      }
+
+      // ==============================
+      // ENTRADA NORMAL
+      // ==============================
+
+      const jTxt=hObj
+        ?`${hObj.entrada}${hObj.salida?` - ${hObj.salida}`:''}`
+        :'8h'
 
       const row=[
         tel10F,
@@ -177,7 +213,7 @@ export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
         Math.round(dMin).toString(),
         '',
         '',
-        esLibre(jTxt)?'0':calcularHorasTrabajadas(h,''),
+        calcularHorasTrabajadas(h,''),
         '0',
         jTxt
       ]
@@ -198,24 +234,74 @@ export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
         })
       }
 
-      await sock.sendMessage(
-        jid,
-        {text:`✅ ${estatus} - ${nombre} en ${cercana.nombre} - ${h}`}
-      )
+      await sock.sendMessage(jid,{
+        text:`✅ ${estatus} - ${nombre} en ${cercana.nombre} - ${h}`
+      })
 
       return
     }
 
-    // =========================
-    // SALIDA
-    // =========================
+    // ==============================
+    // CONVERTIR DESCANSO EN TRABAJO
+    // ==============================
+
+    if(hoy&&String(hoy[3]||'').toUpperCase()==='DESCANSO'){
+
+      if(dMin>cercana.rEnt){
+        await sock.sendMessage(
+          jid,
+          {text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}`},
+          {quoted:m}
+        )
+        return
+      }
+
+      const h=horaMX()
+
+      const row=[
+        tel10F,
+        nombre,
+        fLab,
+        h,
+        'TRABAJO EN DESCANSO',
+        '',
+        cercana.nombre,
+        Math.round(dMin).toString(),
+        '',
+        '',
+        '0',
+        '0',
+        'DESCANSO'
+      ]
+
+      await sClient.spreadsheets.values.update({
+        spreadsheetId:SPREADSHEET_ID,
+        range:`Asistencia!A${idx+1}:M${idx+1}`,
+        valueInputOption:'USER_ENTERED',
+        requestBody:{values:[row]}
+      })
+
+      await sock.sendMessage(jid,{
+        text:`✅ TRABAJO EN DESCANSO - ${nombre} en ${cercana.nombre} - ${h}`
+      })
+
+      return
+    }
+
+    // ==============================
+    // SALIDA YA REGISTRADA
+    // ==============================
+
     if(hoy[5]){
-      await sock.sendMessage(
-        jid,
-        {text:`Salida ya registrada`}
-      )
+      await sock.sendMessage(jid,{
+        text:`Salida ya registrada`
+      })
       return
     }
+
+    // ==============================
+    // VALIDAR DISTANCIA DE SALIDA
+    // ==============================
 
     if(dMin>cercana.rSal){
       await sock.sendMessage(
@@ -232,16 +318,26 @@ export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
     let trabajadas='0'
     let extra='0'
 
-    if(!esLibre(jTxt)){
-      const calc=calcularExtra(
+    // ==============================
+    // SALIDA TRABAJO EN DESCANSO
+    // ==============================
+
+    if(String(hoy[4]||'').toUpperCase()==='TRABAJO EN DESCANSO'){
+
+      trabajadas=calcularHorasTrabajadas(hoy[3],h)
+      extra=trabajadas
+
+    }else{
+
+      const resultado=calcularExtra(
         hoy[3],
         h,
         hObj?.entrada||null,
         hObj?.salida||null
       )
 
-      trabajadas=calc.trabajadas
-      extra=calc.extra
+      trabajadas=resultado.trabajadas
+      extra=resultado.extra
     }
 
     await sClient.spreadsheets.values.update({
@@ -262,166 +358,213 @@ export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
       }
     })
 
-    // No mostramos horas ni extra en WhatsApp
-    await sock.sendMessage(
-      jid,
-      {text:`✅ Salida - ${nombre} en ${cercana.nombre} - ${h}`}
+    await sock.sendMessage(jid,{
+      text:`✅ Salida - ${nombre} en ${cercana.nombre} - ${h}`
+    })
+
+  }catch(e){
+    console.error('Error checador:',e)
+  }
+}
+
+
+// =====================================================
+// REGISTRAR DESCANSOS AUTOMÁTICAMENTE
+// =====================================================
+
+export async function registrarDescansos(){
+
+  const ahora=horaMX()
+  const [hh]=ahora.split(':').map(Number)
+
+  // No registrar descansos antes de las 06:00
+  if(hh<6)return
+
+  const hoy=fechaLaboral()
+
+  if(ultimoRegistroDescansos===hoy)return
+
+  const baseRows=await getRows('Horario_Base!A2:K')
+  const asisRows=await getRows('Asistencia!A2:M')
+
+  const dia=diaMexico()
+  const sClient=await sheetsClient()
+
+  for(const r of baseRows){
+
+    const tel=(r[0]||'').replace(/\D/g,'').slice(-10)
+
+    if(!tel)continue
+
+    const horario=horarioDelDia(r,dia)
+
+    if(!esDescanso(horario))continue
+
+    const existe=asisRows.findIndex(a=>
+      (a[0]||'').replace(/\D/g,'').slice(-10)===tel &&
+      a[2]===hoy
     )
 
-  }catch(e){
-    console.error('ERROR CHECADOR:',e)
+    // Si ya existe registro de hoy, no crear otro
+    if(existe!==-1){
+      continue
+    }
+
+    const nombre=r[1]||tel
+
+    const row=[
+      tel,
+      nombre,
+      hoy,
+      'DESCANSO',
+      'DESCANSO',
+      'DESCANSO',
+      '',
+      '',
+      '',
+      '',
+      '0',
+      '0',
+      'DESCANSO'
+    ]
+
+    await sClient.spreadsheets.values.append({
+      spreadsheetId:SPREADSHEET_ID,
+      range:'Asistencia!A:M',
+      valueInputOption:'USER_ENTERED',
+      requestBody:{values:[row]}
+    })
   }
+
+  ultimoRegistroDescansos=hoy
 }
 
-// ============================================================
-// CIERRE AUTOMÁTICO DESPUÉS DE 16 HORAS
-// ============================================================
+
+// =====================================================
+// CIERRE AUTOMÁTICO A LAS 16 HORAS
+// =====================================================
+
 export async function cerrarSalidasPendientes(){
-  try{
-    const ahora=new Date()
-    const asis=await getRows('Asistencia!A:M')
-    const baseMap=await getHorarioBaseMap()
-    const sClient=await sheetsClient()
 
-    if(!asis || asis.length<=1) return
+  const asis=await getRows('Asistencia!A:M')
+  const sClient=await sheetsClient()
+  const ahora=new Date()
 
-    let cerrados=0
+  for(let i=1;i<asis.length;i++){
 
-    for(let i=1;i<asis.length;i++){
-      const r=asis[i]
+    const r=asis[i]
 
-      if(!r || !r[0] || !r[2] || !r[3]) continue
+    if(!r[2]||!r[3]||r[5])continue
 
-      // Ya tiene salida real o cierre automático
-      if(r[5] || esSinSalida(r)) continue
+    const est=String(r[4]||'').toUpperCase()
 
-      const tel=(r[0]||'').replace(/\D/g,'').slice(-10)
-      const nombre=r[1]||tel
-      const fecha=r[2]
-      const entrada=r[3]
-      const jornada=r[12]||''
+    if(est==='DESCANSO')continue
+    if(String(r[3]).toUpperCase()==='DESCANSO')continue
 
-      if(!tel || !fecha || !entrada) continue
+    const fecha=String(r[2]).trim()
+    const entrada=String(r[3]).trim()
 
-      const entradaDate=fechaHoraMXDesdeFechaHora(fecha,entrada)
+    const fechaHora=new Date(`${fecha}T${entrada}`)
 
-      if(isNaN(entradaDate.getTime())) continue
+    if(isNaN(fechaHora.getTime()))continue
 
-      const minutosTranscurridos=minutosEntreFechas(
-        entradaDate,
-        ahora
-      )
+    const horas=(ahora-fechaHora)/3600000
 
-      if(minutosTranscurridos < CIERRE_AUTO_HORAS*60) continue
+    if(horas<CIERRE_AUTO_HORAS)continue
 
-      // ======================================================
-      // LIBRE:
-      // SIN SALIDA pero 0 horas y 0 extra
-      // ======================================================
-      let trabajadas='0'
-      let extra='0'
+    let trabajadas='0'
+    let extra='0'
 
-      if(!esLibre(jornada)){
-        const base=
-          baseMap[tel]||
-          baseMap[normaliza(nombre).split(' ')[0]]||
-          null
+    const jornada=String(r[12]||'').toLowerCase()
 
-        let horaProgramadaEntrada=null
-        let horaProgramadaSalida=null
+    // ==============================
+    // LIBRE / FLEX
+    // ==============================
 
-        if(base){
-          const fe=new Date(fecha+'T12:00:00')
-          const dn=fe.getDay()
-          const hObj=base.horas?.[dn]
+    if(jornada.includes('libre')||jornada.includes('flex')){
 
-          if(hObj){
-            horaProgramadaEntrada=hObj.entrada||null
-            horaProgramadaSalida=hObj.salida||null
-          }
-        }
+      trabajadas='0'
+      extra='0'
 
-        const cierreDate=new Date(
-          entradaDate.getTime()+
-          CIERRE_AUTO_HORAS*60*60*1000
-        )
+    }else{
 
-        const cierreHora=formatearHora(cierreDate)
+      const entradaProg=(r[12]||'').match(/(\d{1,2}:\d{2})/)
+      const salidaProg=(r[12]||'').match(/(?:-|a)\s*(\d{1,2}:\d{2})/)
 
-        const calc=calcularExtra(
+      const pe=entradaProg?.[1]||null
+      const ps=salidaProg?.[1]||null
+
+      if(pe&&ps){
+
+        const resultado=calcularExtra(
           entrada,
-          cierreHora,
-          horaProgramadaEntrada,
-          horaProgramadaSalida
+          horaMX(),
+          pe,
+          ps
         )
 
-        trabajadas=calc.trabajadas
-        extra=calc.extra
+        trabajadas=resultado.trabajadas
+        extra=resultado.extra
+
+      }else{
+
+        trabajadas=calcularHorasTrabajadas(
+          entrada,
+          horaMX()
+        )
+
+        extra='0'
       }
-
-      const cierreDate=new Date(
-        entradaDate.getTime()+
-        CIERRE_AUTO_HORAS*60*60*1000
-      )
-
-      const cierreHora=formatearHora(cierreDate)
-
-      // F = salida automática
-      // I = SIN SALIDA
-      // J = AUTO 16H
-      // K = horas trabajadas
-      // L = extra
-      await sClient.spreadsheets.values.update({
-        spreadsheetId:SPREADSHEET_ID,
-        range:`Asistencia!F${i+1}:M${i+1}`,
-        valueInputOption:'USER_ENTERED',
-        requestBody:{
-          values:[[
-            cierreHora,
-            r[6]||'',
-            r[7]||'',
-            r[8]||'',
-            r[9]||'',
-            trabajadas,
-            extra,
-            r[12]||''
-          ]]
-        }
-      })
-
-      // Marcar SIN SALIDA / AUTO 16H
-      await sClient.spreadsheets.values.update({
-        spreadsheetId:SPREADSHEET_ID,
-        range:`Asistencia!I${i+1}:J${i+1}`,
-        valueInputOption:'USER_ENTERED',
-        requestBody:{
-          values:[[
-            'SIN SALIDA',
-            'AUTO 16H'
-          ]]
-        }
-      })
-
-      cerrados++
-
-      console.log(
-        `AUTO CIERRE 16H: ${nombre} ${fecha} entrada ${entrada} -> salida ${cierreHora} | Trab ${trabajadas} | Extra ${extra}`
-      )
     }
 
-    if(cerrados){
-      console.log(`AUTO CIERRES REALIZADOS: ${cerrados}`)
-    }
+    // La salida automática es exactamente 16 horas
+    // después de la entrada real.
+    const fechaCierre=new Date(
+      fechaHora.getTime()+CIERRE_AUTO_HORAS*3600000
+    )
 
-  }catch(e){
-    console.error('ERROR CIERRE AUTO 16H:',e)
+    const cierre=horaMX(fechaCierre)
+
+    await sClient.spreadsheets.values.update({
+      spreadsheetId:SPREADSHEET_ID,
+      range:`Asistencia!F${i+1}:M${i+1}`,
+      valueInputOption:'USER_ENTERED',
+      requestBody:{
+        values:[[
+          cierre,
+          r[6]||'',
+          r[7]||'',
+          r[8]||'',
+          r[9]||'',
+          trabajadas,
+          extra,
+          r[12]||''
+        ]]
+      }
+    })
+
+    // Marcar como salida automática
+    await sClient.spreadsheets.values.update({
+      spreadsheetId:SPREADSHEET_ID,
+      range:`Asistencia!I${i+1}:J${i+1}`,
+      valueInputOption:'USER_ENTERED',
+      requestBody:{
+        values:[[
+          'SIN SALIDA',
+          'AUTO 16H'
+        ]]
+      }
+    })
   }
 }
 
-// ============================================================
+
+// =====================================================
 // AVISO DE PERSONAS QUE NO HAN LLEGADO
-// ============================================================
+// =====================================================
+
 export async function checkNoLlegaron(sock){
+
   const hoy=fechaLaboral()
 
   if(fechaAvisos!==hoy){
@@ -434,86 +577,85 @@ export async function checkNoLlegaron(sock){
   const baseRows=await getRows('Horario_Base!A2:K')
   const asisRows=await getRows('Asistencia!A2:M')
 
-  const mxNow=new Date(
-    new Date().toLocaleString(
-      'en-US',
-      {timeZone:'America/Mexico_City'}
-    )
-  )
-
-  const diaNum=mxNow.getDay()
+  const diaNum=diaMexico()
 
   for(const r of baseRows){
+
     const tel=(r[0]||'').replace(/\D/g,'').slice(-10)
 
-    if(!tel) continue
+    if(!tel)continue
 
     const key=`${hoy}_${tel}`
 
-    if(avisosHoy.has(key)) continue
+    if(avisosHoy.has(key))continue
 
-    const mapa={
-      1:r[3],
-      2:r[4],
-      3:r[5],
-      4:r[6],
-      5:r[7],
-      6:r[8],
-      0:r[9]
-    }
+    const v=horarioDelDia(r,diaNum)
 
-    const v=(mapa[diaNum]||'').toString().trim()
+    // Día de descanso: no generar aviso
+    if(esDescanso(v))continue
+
     const parsed=parseHorarioRango(v)
 
-    if(!parsed) continue
-    if(parsed.entrada==='LIBRE') continue
-    if(!parsed.entrada) continue
+    // LIBRE: no generar aviso
+    if(!parsed||parsed.entrada==='LIBRE'||!parsed.entrada)continue
 
     const dif=ahoraMin-minutos(parsed.entrada)
 
-    // Nunca avisar antes de la hora programada
-    if(dif<AVISO_FALTA_MIN) continue
+    // Solo después de 20 minutos de la hora programada
+    if(dif<AVISO_FALTA_MIN)continue
 
     const registro=asisRows.find(a=>
       (a[0]||'').replace(/\D/g,'').slice(-10)===tel &&
       a[2]===hoy &&
-      a[3]
+      a[3] &&
+      String(a[3]).toUpperCase()!=='DESCANSO'
     )
 
-    if(registro) continue
+    if(registro)continue
 
     avisosHoy.add(key)
 
     const nombre=r[1]||tel
-    const sucId=(r[2]||'').toLowerCase()
+    const sucursalAsignada=(r[2]||'').toString().trim()
+    const sucId=sucursalAsignada.toLowerCase()
+
+    // =================================================
+    // IMPORTANTE:
+    // EL AVISO VA AL GRUPO DE GERENTES,
+    // NO AL GRUPO DEL CHECADOR.
+    //
+    // Se toma la sucursal ASIGNADA del empleado.
+    // =================================================
 
     let grupoAviso=null
 
     if(
-      sucId.includes('coyo')||
-      sucId.includes('hotel')||
+      sucId.includes('coyo') ||
+      sucId.includes('hotel') ||
       sucId.includes('trinidad')
     ){
-      grupoAviso=GRUPO_CHECADOR_COYOACAN_ID
+      grupoAviso=GRUPO_COYOACAN_ID
     }else{
-      grupoAviso=GRUPO_CHECADOR_BUCARELI_ID
+      grupoAviso=GRUPO_BUCARELI_ID
     }
 
-    if(grupoAviso){
-      try{
-        await sock.sendMessage(
-          grupoAviso,
-          {
-            text:
-              `⚠️ *NO HA LLEGADO* - ${nombre}\n`+
-              `Prog: ${parsed.entrada}\n`+
-              `Más de 20 min sin registrar entrada\n`+
-              `[${r[2]||''}]`
-          }
-        )
-      }catch(e){
-        console.error('ERROR AVISO NO LLEGADA:',e)
-      }
+    if(!grupoAviso)continue
+
+    try{
+
+      await sock.sendMessage(
+        grupoAviso,
+        {
+          text:
+`⚠️ NO HA LLEGADO - ${nombre}
+Prog: ${parsed.entrada}
+Más de 20 min sin registrar entrada
+[${sucursalAsignada}]`
+        }
+      )
+
+    }catch(e){
+      console.error('Error enviando aviso de no llegada:',e)
     }
   }
 }
