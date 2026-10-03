@@ -1,14 +1,16 @@
-import makeWASocket,{useMultiFileAuthState,DisconnectReason,fetchLatestBaileysVersion} from '@whiskeysockets/baileys'
+```js
+import makeWASocket,{useMultiFileAuthState,DisconnectReason,fetchLatestBaileysVersion}from '@whiskeysockets/baileys'
 import pino from 'pino'
 import qrcode from 'qrcode-terminal'
 import cron from 'node-cron'
 
-import {getTipoGrupo,GRUPO_COYOACAN_ID,GRUPO_BUCARELI_ID} from './src/config.js'
-import {handleChecador,registrarDescansos,cerrarSalidasPendientes,checkNoLlegaron} from './src/checador.js'
-import {handleReportes} from './src/reportes.js'
-import {handleCompras} from './src/compras.js'
+import {getTipoGrupo,GRUPO_COYOACAN_ID,GRUPO_BUCARELI_ID}from './src/config.js'
+import {handleChecador,registrarDescansos,cerrarSalidasPendientes,checkNoLlegaron}from './src/checador.js'
+import {handleReportes}from './src/reportes.js'
+import {handleCompras}from './src/compras.js'
 
 const AUTH_DIR='/app/auth'
+
 const COMANDOS_REPORTES=/^(reportes|info|datos|cuenta bancaria|cuenta empleado|datos bancarios|cuenta|banco|clave|clabe|asistencia hoy|resumen|reporte|compras\b|faltas|retardos|críticos|criticos|graves|excel|reporte semanal|reporte mensual)\b/i
 
 const sesion={sock:null,conectado:false}
@@ -27,11 +29,37 @@ const obtenerLoc=m=>{
   return x?{degreesLatitude:x.degreesLatitude,degreesLongitude:x.degreesLongitude}:null
 }
 
-const obtenerRawLid=m=>(m.key?.participant||m.key?.remoteJid||'').toString()
+/*
+ * Identificación del participante.
+ *
+ * Si WhatsApp entrega @lid, lo conservamos como LID.
+ * No usamos los números del LID como si fueran teléfono.
+ */
+const obtenerIdentidad=m=>{
+  const participante=(m.key?.participant||'').toString()
+  const remoto=(m.key?.remoteJid||'').toString()
 
-const obtenerTelefono=m=>
-  (m.key?.participant||m.key?.remoteJid||'')
-  .toString().split(':')[0].split('@')[0].replace(/\D/g,'')
+  const candidatos=[participante,remoto]
+
+  const lid=candidatos.find(x=>x.includes('@lid'))||''
+
+  const fuenteTelefono=candidatos.find(x=>
+    x &&
+    !x.includes('@lid') &&
+    !x.includes('@g.us')
+  )||''
+
+  const tel=fuenteTelefono
+    .split(':')[0]
+    .split('@')[0]
+    .replace(/\D/g,'')
+
+  return {
+    rawLid:lid,
+    tel,
+    tel10:tel.slice(-10)
+  }
+}
 
 const getFiltro=jid=>
   jid===GRUPO_COYOACAN_ID?'coyoacan':
@@ -91,10 +119,12 @@ async function conectar(){
       if(connection==='close'){
         sesion.conectado=false
         sesion.sock=null
+
         const code=lastDisconnect?.error?.output?.statusCode
         console.log('Conexion cerrada. Codigo:',code)
 
         iniciando=false
+
         if(code!==DisconnectReason.loggedOut){
           setTimeout(()=>conectar().catch(console.error),5000)
         }else{
@@ -116,27 +146,36 @@ async function conectar(){
           const tipoGrupo=getTipoGrupo(jid)
           const texto=textoMensaje(m)
           const loc=obtenerLoc(m)
-          const tel=obtenerTelefono(m)
-          const tel10=tel.slice(-10)
-          const rawLid=obtenerRawLid(m)
+          const identidad=obtenerIdentidad(m)
           const esImagen=!!m.message?.imageMessage
 
-          // CHECADORES
           if(tipoGrupo==='CHECADORES'){
             if(loc){
-              await handleChecador({sock,jid,m,loc,rawLid,tel10,tel})
+              await handleChecador({
+                sock,
+                jid,
+                m,
+                loc,
+                rawLid:identidad.rawLid,
+                tel10:identidad.tel10,
+                tel:identidad.tel
+              })
             }
             continue
           }
 
-          // COMPRAS
-          if((tipoGrupo==='REPORTES'||tipoGrupo==='GERENTES')&&(esImagen||/^compras\b/i.test(texto))){
+          if(
+            (tipoGrupo==='REPORTES'||tipoGrupo==='GERENTES')&&
+            (esImagen||/^compras\b/i.test(texto))
+          ){
             await handleCompras({sock,jid,m,texto,esImagen})
             continue
           }
 
-          // REPORTES / GERENTES
-          if((tipoGrupo==='REPORTES'||tipoGrupo==='GERENTES')&&COMANDOS_REPORTES.test(texto)){
+          if(
+            (tipoGrupo==='REPORTES'||tipoGrupo==='GERENTES')&&
+            COMANDOS_REPORTES.test(texto)
+          ){
             await handleReportes({
               sock,
               jid,
@@ -169,3 +208,8 @@ cron.schedule('*/10 * * * *',async()=>{
 
 console.log('🚀 Iniciando RH Trinidad...')
 conectar().catch(console.error)
+```
+
+**Ojo:** este cambio de `index.js` solo prepara correctamente `rawLid`, `tel` y `tel10`. Todavía falta conectar esas funciones nuevas de `sheets.js` dentro de `checador.js`.
+
+El siguiente archivo será **`src/checador.js`**, donde haremos la parte importante: **encontrar a Wilbert, usar su nombre real y guardar automáticamente su LID en `Empleados!K`**.
