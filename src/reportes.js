@@ -214,12 +214,14 @@ export async function resumenEmpleado(nombreBuscar,jidRespuesta,sock,tipo='actua
     if(!fe)continue
 
     fe.setHours(0,0,0,0)
+
     if(fe<lunes||fe>domingo)continue
 
     if(f[3]){
       diasSem++
 
       const ret=(f[4]||'').match(/(\d+)\s*min/)
+
       if(ret){
         retSem++
         minSem+=parseInt(ret[1])
@@ -231,7 +233,9 @@ export async function resumenEmpleado(nombreBuscar,jidRespuesta,sock,tipo='actua
 
       if(f[3]&&f[5]&&progDia){
         const calc=calcularExtra(f[3],f[5],progDia.entrada,progDia.salida)
-        const mt=calc.trabajadas==="8"?480:(()=>{const[hh,mm]=calc.trabajadas.split(':').map(Number);return hh*60+mm})()
+        const mt=calc.trabajadas==="8"
+          ?480
+          :(()=>{const[hh,mm]=calc.trabajadas.split(':').map(Number);return hh*60+mm})()
 
         horasMin+=mt
         extraTotal+=calc.extraMin
@@ -591,10 +595,6 @@ function formatoInfoEmpleado(r){
   const telEmerg=r[7]||''
   const curp=r[8]||''
   const nss=r[9]||''
-  const banco=r[12]||''
-  const clabe=r[13]||''
-  const cuenta=r[14]||''
-  const tarjeta=r[15]||''
   const status=r[16]||''
   const baja=r[17]||''
   const motivoBaja=r[18]||''
@@ -622,21 +622,6 @@ function formatoInfoEmpleado(r){
     if(curp)txt+=`\n🪪 CURP: ${curp}`
     if(contacto)txt+=`\n🚨 Contacto de emergencia: ${contacto}`
     if(telEmerg)txt+=`\n📞 Tel. emergencia: ${telEmerg}`
-
-    if(banco||clabe||cuenta||tarjeta){
-      txt+=`\n\n🏦 *Datos bancarios*`
-
-      if(clabe){
-        if(banco)txt+=`\nBanco: ${banco}`
-        txt+=`\nCLABE: ${clabe}`
-      }else if(cuenta){
-        if(banco)txt+=`\nBanco: ${banco}`
-        txt+=`\nCuenta: ${cuenta}`
-      }else if(tarjeta){
-        if(banco)txt+=`\nBanco: ${banco}`
-        txt+=`\nTarjeta: ${tarjeta}`
-      }
-    }
   }
 
   return txt
@@ -671,7 +656,7 @@ function obtenerDatosBancarios(r){
   const tarjeta=(r[15]||'').toString().trim()
   const nombre=r[3]||r[1]||'-'
 
-  let txt=`🏦 *Datos bancarios — ${nombre}*`
+  let txt=`🏦 *${nombre}*`
 
   if(clabe){
     if(banco)txt+=`\nBanco: ${banco}`
@@ -685,33 +670,6 @@ function obtenerDatosBancarios(r){
   }else{
     txt+=`\nSin datos bancarios registrados.`
   }
-
-  return txt
-}
-
-function obtenerBanco(r){
-  const nombre=r[3]||r[1]||'-'
-  const banco=(r[12]||'').toString().trim()
-
-  return banco
-    ? `🏦 *${nombre}*\nBanco: ${banco}`
-    : `🏦 *${nombre}*\nBanco: No registrado`
-}
-
-function obtenerClabe(r){
-  const nombre=r[3]||r[1]||'-'
-  const banco=(r[12]||'').toString().trim()
-  const clabe=(r[13]||'').toString().trim()
-
-  if(!clabe){
-    return `🏦 *${nombre}*\nCLABE: No registrada`
-  }
-
-  let txt=`🏦 *${nombre}*`
-
-  if(banco)txt+=`\nBanco: ${banco}`
-
-  txt+=`\nCLABE: ${clabe}`
 
   return txt
 }
@@ -791,17 +749,11 @@ Escribe el número de la persona.`
   }
 
   const r=candidatos[0].r
-  let txt
 
-  if(comando==='banco'){
-    txt=obtenerBanco(r)
-  }else if(comando==='clave'||comando==='clabe'){
-    txt=obtenerClabe(r)
-  }else{
-    txt=obtenerDatosBancarios(r)
-  }
+  await sock.sendMessage(jid,{
+    text:obtenerDatosBancarios(r)
+  })
 
-  await sock.sendMessage(jid,{text:txt})
   return true
 }
 
@@ -842,21 +794,13 @@ async function procesarPendienteReporte(texto,jid,sock){
     }
 
     const r=p.candidatos[n-1].r
-    const comando=p.comando||'cuenta'
 
     pendientesReporte.delete(jid)
 
-    let txt
+    await sock.sendMessage(jid,{
+      text:obtenerDatosBancarios(r)
+    })
 
-    if(comando==='banco'){
-      txt=obtenerBanco(r)
-    }else if(comando==='clave'||comando==='clabe'){
-      txt=obtenerClabe(r)
-    }else{
-      txt=obtenerDatosBancarios(r)
-    }
-
-    await sock.sendMessage(jid,{text:txt})
     return true
   }
 
@@ -944,9 +888,10 @@ export async function handleReportes({texto,jid,sock,filtroGrupo}){
   if(await procesarPendienteReporte(texto,jid,sock))return true
 
   /*
-   * =========================
    * DATOS BANCARIOS
-   * =========================
+   * banco / clabe / clave / cuenta
+   * Todos usan prioridad:
+   * CLABE -> Cuenta -> Tarjeta
    */
   const matchBancario=textoTrim.match(/^(datos bancarios|cuenta empleado|cuenta|banco|clave|clabe)\s+(.+)$/i)
 
@@ -972,11 +917,6 @@ export async function handleReportes({texto,jid,sock,filtroGrupo}){
     return true
   }
 
-  /*
-   * =========================
-   * ASISTENCIA HOY
-   * =========================
-   */
   if(low.startsWith('asistencia hoy')){
     let suc=low.replace('asistencia hoy','').trim()
 
@@ -986,11 +926,6 @@ export async function handleReportes({texto,jid,sock,filtroGrupo}){
     return true
   }
 
-  /*
-   * =========================
-   * RESUMEN
-   * =========================
-   */
   if(low.startsWith('resumen ')){
     const tipo=periodoDesdeTexto(low)||'actual'
     let limpio=limpiarPeriodo(textoTrim.slice(8).trim())
@@ -1023,11 +958,6 @@ export async function handleReportes({texto,jid,sock,filtroGrupo}){
     return true
   }
 
-  /*
-   * =========================
-   * REPORTES
-   * =========================
-   */
   if(/^(reporte|checador|reporte x unidad)/i.test(textoTrim)){
     const contenido=textoTrim.replace(/^(reporte|checador|reporte x unidad)\s*/i,'').trim()
     const limpio=limpiarPeriodo(contenido)
@@ -1098,11 +1028,6 @@ export async function handleReportes({texto,jid,sock,filtroGrupo}){
     return true
   }
 
-  /*
-   * =========================
-   * INFO EMPLEADO
-   * =========================
-   */
   if(/^(numero|número|num|tel|telefono|teléfono|info|ficha|datos|dato)\s+(.+)$/i.test(textoTrim)){
     const buscar=textoTrim
       .replace(/^(numero|número|num|tel|telefono|teléfono|info|ficha|datos|dato)\s+/i,'')
