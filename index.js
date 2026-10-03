@@ -9,7 +9,7 @@ import {handleReportes} from './src/reportes.js'
 import {handleCompras} from './src/compras.js'
 
 const AUTH_DIR='/app/auth'
-const COMANDOS_REPORTES=/^(info|datos|cuenta bancaria|cuenta empleado|datos bancarios|cuenta|banco|clave|clabe|asistencia hoy|resumen|reporte|compras\b|faltas|retardos|críticos|criticos|graves|excel|reporte semanal|reporte mensual)\b/i
+const COMANDOS_REPORTES=/^(reportes|info|datos|cuenta bancaria|cuenta empleado|datos bancarios|cuenta|banco|clave|clabe|asistencia hoy|resumen|reporte|compras\b|faltas|retardos|críticos|criticos|graves|excel|reporte semanal|reporte mensual)\b/i
 
 const sesion={sock:null,conectado:false}
 let iniciando=false
