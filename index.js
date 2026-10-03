@@ -129,7 +129,7 @@ app.get(
 // ============================================================
 //
 // Estos endpoints trabajan con:
-// /app/baileys_auth
+// /app/auth
 //
 // Se mantienen para poder respaldar/restaurar la sesión
 // de WhatsApp si fuera necesario.
@@ -147,7 +147,7 @@ app.get(
     try {
 
       const dir =
-        '/app/baileys_auth'
+        '/app/auth'
 
 
       if (!fs.existsSync(dir)) {
@@ -211,7 +211,7 @@ app.post(
     try {
 
       const dir =
-        '/app/baileys_auth'
+        '/app/auth'
 
 
       if (!fs.existsSync(dir)) {
@@ -358,7 +358,7 @@ let cronInterval = null
 
 
 // ============================================================
-// 6. INICIAR WHATSAPP / BAILEYS
+// 6. INICIAR WHATSAPP / auth
 // ============================================================
 
 async function start() {
@@ -374,7 +374,7 @@ async function start() {
   // ----------------------------------------------------------
 
   const authDir =
-    '/app/baileys_auth'
+    '/app/auth'
 
 
   // Si no existe, crearla.
