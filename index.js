@@ -5,7 +5,6 @@ import express from 'express'
 import fs from 'fs'
 import path from 'path'
 import P from 'pino'
-
 import {
   GRUPOS,
   PAQUETES,
@@ -17,8 +16,7 @@ import {
   GRUPO_PRUEBAS_ID,
   GRUPO_REPORTES_TRINIDAD_ID
 } from './src/config.js'
-
-import { handleChecador, checkNoLlegaron } from './src/checador.js'
+import { handleChecador, checkNoLlegaron, cerrarSalidasPendientes } from './src/checador.js'
 import { handleReportes } from './src/reportes.js'
 import { handleCompras } from './src/compras.js'
 
@@ -61,7 +59,6 @@ app.post('/restore',(r,s)=>{
 
     for(const [f,v] of Object.entries(payload)){
       if(f==='dir'||f==='files')continue
-
       if(typeof v==='string'&&v.length>10){
         fs.writeFileSync(path.join(dir,f),v,'utf8')
         c++
@@ -78,21 +75,12 @@ app.listen(process.env.PORT||3000,()=>console.log('WEB '+(process.env.PORT||3000
 
 async function getFiltro(jid){
   if(jid===GRUPO_PRUEBAS_ID||jid===GRUPO_REPORTES_TRINIDAD_ID)return null
-
-  if(
-    jid===GRUPO_COYOACAN_ID||
-    jid===GRUPO_CHECADOR_COYOACAN_ID
-  )return 'coyoacan'
-
-  if(
-    jid===GRUPO_BUCARELI_ID||
-    jid===GRUPO_CHECADOR_BUCARELI_ID
-  )return 'bucareli'
-
+  if(jid===GRUPO_COYOACAN_ID||jid===GRUPO_CHECADOR_COYOACAN_ID)return 'coyoacan'
+  if(jid===GRUPO_BUCARELI_ID||jid===GRUPO_CHECADOR_BUCARELI_ID)return 'bucareli'
   return null
 }
 
-const COMANDOS_REPORTES=/^(info|ficha|datos|dato|numero|número|num|tel|telefono|teléfono|cuenta|banco|clave|clabe|datos bancarios)\s+.+|^(asistencia hoy|resumen|reporte|checador|compras de hoy)/i
+const COMANDOS_REPORTES=/^(datos bancarios|cuenta bancaria|cuenta empleado|info|ficha|datos|dato|numero|número|num|tel|telefono|teléfono|cuenta|banco|clave|clabe)\s+.+|^(asistencia hoy|resumen|reporte|checador|compras de hoy|faltas|retardos|críticos|criticos|graves)/i
 
 let cronInterval=null
 
@@ -138,13 +126,25 @@ async function start(){
 
     if(connection==='open'){
       console.log('CONECTADO MODULAR + VOLUME OK')
+
       lastQR=null
 
       if(cronInterval)clearInterval(cronInterval)
 
       cronInterval=setInterval(()=>{
-        checkNoLlegaron(sock).catch(e=>console.log('cron error',e.message))
+        cerrarSalidasPendientes().catch(e=>{
+          console.log('cierre auto error',e.message)
+        })
+
+        checkNoLlegaron(sock).catch(e=>{
+          console.log('cron error',e.message)
+        })
       },10*60*1000)
+
+      // Ejecutar también inmediatamente al conectar.
+      cerrarSalidasPendientes().catch(e=>{
+        console.log('cierre auto inicial error',e.message)
+      })
     }
   })
 
@@ -221,6 +221,7 @@ async function start(){
             sock,
             filtroGrupo:filtro
           })
+
           return
         }
 
@@ -247,6 +248,7 @@ async function start(){
 
       if(tipo==='GERENTES'){
         if(loc)return
+
         if(!COMANDOS_REPORTES.test(textoTrim))return
 
         await handleReportes({
