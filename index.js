@@ -58,13 +58,16 @@ app.post('/restore',(r,s)=>{
     const data=r.body
     const payload=data.data?data.data:data
     let c=0
+
     for(const [f,v] of Object.entries(payload)){
       if(f==='dir'||f==='files')continue
+
       if(typeof v==='string'&&v.length>10){
         fs.writeFileSync(path.join(dir,f),v,'utf8')
         c++
       }
     }
+
     s.json({ok:true,restaurados:c})
   }catch(e){
     s.json({error:e.message})
@@ -89,7 +92,7 @@ async function getFiltro(jid){
   return null
 }
 
-const COMANDOS_REPORTES=/^(info|ficha|datos|dato|numero|número|num|tel|telefono|teléfono|cuenta|banco|datos bancarios)\s+.+|^(asistencia hoy|resumen|reporte|checador|compras de hoy)/i
+const COMANDOS_REPORTES=/^(info|ficha|datos|dato|numero|número|num|tel|telefono|teléfono|cuenta|banco|clave|clabe|datos bancarios)\s+.+|^(asistencia hoy|resumen|reporte|checador|compras de hoy)/i
 
 let cronInterval=null
 
@@ -185,12 +188,10 @@ async function start(){
       }catch{}
 
       const rawId=realPn||pn||rawLid||jid
-
       const tel=(rawId||'').toString().replace(/\D/g,'')
       const tel10=tel.slice(-10)
 
       const esImagen=!!m.message?.imageMessage
-
       const tipo=getTipoGrupo(jid)
 
       if(!tipo){
@@ -200,13 +201,7 @@ async function start(){
 
       const filtro=await getFiltro(jid)
 
-      /*
-       * =========================
-       * REPORTES / PRUEBAS
-       * =========================
-       */
       if(tipo==='REPORTES'){
-
         if(esImagen||/^compras/i.test(textoTrim)){
           const ok=await handleCompras({
             sock,
@@ -232,13 +227,7 @@ async function start(){
         return
       }
 
-      /*
-       * =========================
-       * CHECADORES
-       * =========================
-       */
       if(tipo==='CHECADORES'){
-
         if(!loc)return
 
         console.log(`Ubicación recibida de ${tel10} en ${jid}`)
@@ -256,15 +245,8 @@ async function start(){
         return
       }
 
-      /*
-       * =========================
-       * GERENTES
-       * =========================
-       */
       if(tipo==='GERENTES'){
-
         if(loc)return
-
         if(!COMANDOS_REPORTES.test(textoTrim))return
 
         await handleReportes({
