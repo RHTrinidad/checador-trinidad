@@ -10,6 +10,251 @@ const DIAS_RETARDOS=30
 const DIAS_CRITICOS=45
 const CUTOFF_RETARDOS='2026-10-02'
 
+// =====================================================
+// CATÁLOGO CENTRAL DE REPORTES
+// =====================================================
+
+const CATALOGO_REPORTES=[
+  {
+    comando:'info [nombre]',
+    descripcion:'Datos generales del empleado',
+    grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
+  },
+  {
+    comando:'datos [nombre]',
+    descripcion:'Datos generales del empleado',
+    grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
+  },
+  {
+    comando:'banco [nombre]',
+    descripcion:'Banco y dato bancario disponible',
+    grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
+  },
+  {
+    comando:'cuenta [nombre]',
+    descripcion:'Cuenta bancaria',
+    grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
+  },
+  {
+    comando:'clabe [nombre]',
+    descripcion:'CLABE bancaria',
+    grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
+  },
+  {
+    comando:'clave [nombre]',
+    descripcion:'CLABE bancaria',
+    grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
+  },
+  {
+    comando:'asistencia hoy',
+    descripcion:'Asistencia del día',
+    grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
+  },
+  {
+    comando:'resumen [nombre]',
+    descripcion:'Resumen semanal del empleado',
+    grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
+  },
+  {
+    comando:'reporte [nombre]',
+    descripcion:'Reporte semanal por sucursal',
+    grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
+  },
+  {
+    comando:'faltas Coyoacán',
+    descripcion:'Faltas de Coyoacán de los últimos 45 días',
+    grupos:['GERENTES_COYOACAN','REPORTES']
+  },
+  {
+    comando:'faltas Bucareli',
+    descripcion:'Faltas de Bucareli de los últimos 45 días',
+    grupos:['GERENTES_BUCARELI','REPORTES']
+  },
+  {
+    comando:'retardos Coyoacán',
+    descripcion:'Retardos de Coyoacán de los últimos 45 días',
+    grupos:['GERENTES_COYOACAN','REPORTES']
+  },
+  {
+    comando:'retardos Bucareli',
+    descripcion:'Retardos de Bucareli de los últimos 45 días',
+    grupos:['GERENTES_BUCARELI','REPORTES']
+  },
+  {
+    comando:'críticos',
+    descripcion:'Empleados con 3 o más faltas equivalentes',
+    grupos:['REPORTES']
+  },
+  {
+    comando:'graves',
+    descripcion:'Empleados con incidencias graves',
+    grupos:['REPORTES']
+  },
+  {
+    comando:'reporte semanal',
+    descripcion:'Reporte semanal',
+    grupos:['REPORTES']
+  },
+  {
+    comando:'reporte mensual',
+    descripcion:'Reporte mensual',
+    grupos:['REPORTES']
+  },
+  {
+    comando:'excel',
+    descripcion:'Generar reporte en Excel',
+    grupos:['REPORTES']
+  },
+  {
+    comando:'compras de hoy',
+    descripcion:'Compras registradas del día',
+    grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
+  }
+]
+
+function grupoActual(filtroGrupo){
+  const f=normaliza(filtroGrupo)
+
+  if(f==='coyoacan'||f==='coyoacan hotel'||f==='hotel'){
+    return 'GERENTES_COYOACAN'
+  }
+
+  if(f==='bucareli'||f==='juarez'){
+    return 'GERENTES_BUCARELI'
+  }
+
+  return 'REPORTES'
+}
+
+function obtenerReportesDisponibles(filtroGrupo){
+  const grupo=grupoActual(filtroGrupo)
+
+  return CATALOGO_REPORTES.filter(r=>
+    r.grupos.includes(grupo)
+  )
+}
+
+function textoListaReportes(filtroGrupo){
+  const grupo=grupoActual(filtroGrupo)
+  const lista=obtenerReportesDisponibles(filtroGrupo)
+
+  const personal=[]
+  const bancarios=[]
+  const asistencia=[]
+  const incidencias=[]
+  const generales=[]
+  const compras=[]
+
+  for(const r of lista){
+
+    if(
+      r.comando.startsWith('info')||
+      r.comando.startsWith('datos')
+    ){
+      personal.push(r)
+      continue
+    }
+
+    if(
+      r.comando.startsWith('banco')||
+      r.comando.startsWith('cuenta')||
+      r.comando.startsWith('clabe')||
+      r.comando.startsWith('clave')
+    ){
+      bancarios.push(r)
+      continue
+    }
+
+    if(
+      r.comando.startsWith('asistencia')||
+      r.comando.startsWith('resumen')||
+      r.comando.startsWith('reporte [')
+    ){
+      asistencia.push(r)
+      continue
+    }
+
+    if(
+      r.comando.startsWith('faltas')||
+      r.comando.startsWith('retardos')||
+      r.comando.startsWith('críticos')||
+      r.comando.startsWith('graves')
+    ){
+      incidencias.push(r)
+      continue
+    }
+
+    if(
+      r.comando.startsWith('reporte semanal')||
+      r.comando.startsWith('reporte mensual')||
+      r.comando.startsWith('excel')
+    ){
+      generales.push(r)
+      continue
+    }
+
+    if(r.comando.startsWith('compras')){
+      compras.push(r)
+    }
+  }
+
+  let txt='📋 *LISTA DE REPORTES*'
+
+  if(grupo==='GERENTES_COYOACAN'){
+    txt+='\n📍 Coyoacán'
+  }else if(grupo==='GERENTES_BUCARELI'){
+    txt+='\n📍 Bucareli'
+  }else{
+    txt+='\n📊 Reportes / Pruebas'
+  }
+
+  if(personal.length){
+    txt+='\n\n👤 *PERSONAL*'
+    for(const r of personal){
+      txt+=`\n• ${r.comando}`
+    }
+  }
+
+  if(bancarios.length){
+    txt+='\n\n🏦 *BANCARIOS*'
+    for(const r of bancarios){
+      txt+=`\n• ${r.comando}`
+    }
+  }
+
+  if(asistencia.length){
+    txt+='\n\n🕐 *ASISTENCIA*'
+    for(const r of asistencia){
+      txt+=`\n• ${r.comando}`
+    }
+  }
+
+  if(incidencias.length){
+    txt+='\n\n📊 *INCIDENCIAS*'
+    for(const r of incidencias){
+      txt+=`\n• ${r.comando}`
+    }
+  }
+
+  if(generales.length){
+    txt+='\n\n📈 *REPORTES GENERALES*'
+    for(const r of generales){
+      txt+=`\n• ${r.comando}`
+    }
+  }
+
+  if(compras.length){
+    txt+='\n\n🛒 *COMPRAS*'
+    for(const r of compras){
+      txt+=`\n• ${r.comando}`
+    }
+  }
+
+  txt+='\n\nEscribe cualquiera de los comandos de la lista.'
+
+  return txt
+}
+
 function tel10(v){
   return (v||'').toString().replace(/\D/g,'').slice(-10)
 }
@@ -788,8 +1033,8 @@ export async function reporteSucursal(
     const empleado=telEmp[tel]
 
     const sucAsignada=
-      empleado?.[2] ||
-      telBase[tel]?.[2] ||
+      empleado?.[2]||
+      telBase[tel]?.[2]||
       ''
 
     if(!sucursalCoincideAsignada(sucAsignada,filtroSucursal)){
@@ -799,9 +1044,9 @@ export async function reporteSucursal(
     if(!f[3])continue
 
     const nombre=
-      empleado?.[3] ||
-      empleado?.[1] ||
-      f[1] ||
+      empleado?.[3]||
+      empleado?.[1]||
+      f[1]||
       'Desconocido'
 
     const key=tel||normaliza(nombre)
@@ -850,7 +1095,6 @@ export async function reporteSucursal(
 
     if(f[3]&&f[5]){
 
-      const prog=telBase[tel]?.[0]
       const horario=telBase[tel]
         ? getHorarioDia(telBase[tel],fe.getDay())
         : ''
@@ -1375,6 +1619,23 @@ export async function handleReportes({
 }){
 
   const low=normaliza(texto)
+
+  // ================================================
+  // LISTA DE REPORTES
+  // ================================================
+
+  if(
+    low==='reportes'||
+    low==='lista de reportes'||
+    low==='lista reportes'
+  ){
+
+    await sock.sendMessage(jid,{
+      text:textoListaReportes(filtroGrupo)
+    })
+
+    return true
+  }
 
   // ================================================
   // ASISTENCIA HOY
