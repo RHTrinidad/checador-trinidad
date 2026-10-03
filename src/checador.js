@@ -1,222 +1,186 @@
-import { SUCURSALES, GRUPO_CHECADOR_COYOACAN_ID, GRUPO_CHECADOR_BUCARELI_ID, GRUPO_COYOACAN_ID, GRUPO_BUCARELI_ID, SPREADSHEET_ID } from './config.js'
-import { distM, fechaLaboral, horaMX, minutos, normaliza, calcularHorasTrabajadas, calcularExtra, parseHorarioRango } from './utils.js'
+import {
+  SUCURSALES,
+  GRUPO_CHECADOR_COYOACAN_ID,
+  GRUPO_CHECADOR_BUCARELI_ID,
+  SPREADSHEET_ID
+} from './config.js'
+import {
+  distM,
+  fechaLaboral,
+  horaMX,
+  minutos,
+  normaliza,
+  calcularHorasTrabajadas,
+  calcularExtra,
+  parseHorarioRango
+} from './utils.js'
 import { getRows, sheetsClient, getHorarioBaseMap } from './sheets.js'
 
-const TOLERANCIA_MIN=15
-const AVISO_FALTA_MIN=20
-const AVISO_RETARDO_60_MIN=60
-const FECHA_CORTE_RETARDOS='2026-10-02'
-const HOJA_ALERTAS_RETARDOS='Alertas_Retardos'
-const HOJA_AVISOS='Avisos'
+const TOLERANCIA_MIN = 15
+const AVISO_FALTA_MIN = 20
+const CIERRE_AUTO_HORAS = 16
 
-const normalizaTel=v=>(v||'').toString().replace(/\D/g,'').slice(-10)
+let avisosHoy = new Set()
+let fechaAvisos = ''
 
-function grupoGerentesPorSucursal(sucursal){
-  const x=normaliza(sucursal)
-  if(x.includes('coyo')||x.includes('hotel')||x.includes('trinidad'))return GRUPO_COYOACAN_ID
-  if(x.includes('juarez')||x.includes('bucareli'))return GRUPO_BUCARELI_ID
-  return null
+function esLibre(jornada){
+  return /libre|flex/i.test(String(jornada || ''))
 }
 
-function horarioLaboralMin(h){
-  const m=minutos(h)
-  return m<300?m+1440:m
+function fechaHoraMXDesdeFechaHora(fecha, hora){
+  const [hh, mm, ss] = String(hora || '00:00:00').split(':').map(Number)
+  const d = new Date(`${fecha}T${String(hh || 0).padStart(2,'0')}:${String(mm || 0).padStart(2,'0')}:${String(ss || 0).padStart(2,'0')}`)
+  return d
 }
 
-function calcularRetardo(hEntrada,hProg){
-  if(!hEntrada||!hProg||hProg==='LIBRE')return 0
-  return horarioLaboralMin(hEntrada)-horarioLaboralMin(hProg)
-}
-
-async function asegurarHojaAvisos(sClient){
-  try{
-    await sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:`${HOJA_AVISOS}!A:D`})
-  }catch(e){
-    try{
-      await sClient.spreadsheets.batchUpdate({
-        spreadsheetId:SPREADSHEET_ID,
-        requestBody:{requests:[{addSheet:{properties:{title:HOJA_AVISOS}}}]}
-      })
-      await sClient.spreadsheets.values.update({
-        spreadsheetId:SPREADSHEET_ID,
-        range:`${HOJA_AVISOS}!A1:D1`,
-        valueInputOption:'USER_ENTERED',
-        requestBody:{values:[['Tel','Fecha','HoraAviso','Nombre Corto']]}
-      })
-    }catch(err){
-      if(!String(err.message||'').toLowerCase().includes('already exists'))throw err
-    }
-  }
-}
-
-async function yaAvisadoNoLlegada(sClient,tel,fecha){
-  await asegurarHojaAvisos(sClient)
-  const r=await sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:`${HOJA_AVISOS}!A:D`})
-  const rows=r.data.values||[]
-  const tel10=normalizaTel(tel)
-  return rows.slice(1).some(x=>normalizaTel(x[0])===tel10&&String(x[1]||'').trim()===fecha)
-}
-
-async function registrarAvisoNoLlegada(sClient,tel,fecha,hora,nombreCorto){
-  await asegurarHojaAvisos(sClient)
-  await sClient.spreadsheets.values.append({
-    spreadsheetId:SPREADSHEET_ID,
-    range:`${HOJA_AVISOS}!A:D`,
-    valueInputOption:'USER_ENTERED',
-    requestBody:{values:[[normalizaTel(tel),fecha,hora,nombreCorto||'']]}
+function formatearHora(d){
+  return d.toLocaleTimeString('es-MX',{
+    hour12:false,
+    timeZone:'America/Mexico_City'
   })
 }
 
-async function asegurarHojaAlertasRetardos(sClient){
-  try{
-    await sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:`${HOJA_ALERTAS_RETARDOS}!A:E`})
-  }catch(e){
-    try{
-      await sClient.spreadsheets.batchUpdate({
-        spreadsheetId:SPREADSHEET_ID,
-        requestBody:{requests:[{addSheet:{properties:{title:HOJA_ALERTAS_RETARDOS}}}]}
-      })
-      await sClient.spreadsheets.values.update({
-        spreadsheetId:SPREADSHEET_ID,
-        range:`${HOJA_ALERTAS_RETARDOS}!A1:E1`,
-        valueInputOption:'USER_ENTERED',
-        requestBody:{values:[['Tel','Nombre Corto','Fecha Aviso','Retardos Contados','Fechas Retardos']]}
-      })
-    }catch(err){
-      if(!String(err.message||'').toLowerCase().includes('already exists'))throw err
-    }
-  }
+function minutosEntreFechas(a,b){
+  return Math.floor((b.getTime()-a.getTime())/60000)
 }
 
-async function revisarTresRetardos(sock){
-  try{
-    const sClient=await sheetsClient()
-    await asegurarHojaAlertasRetardos(sClient)
-    const [asisRes,baseMap,alertRes,empRows]=await Promise.all([
-      sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A2:M'}),
-      getHorarioBaseMap(),
-      sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:`${HOJA_ALERTAS_RETARDOS}!A:E`}),
-      getRows('Empleados!A:K')
-    ])
-    const asis=asisRes.data.values||[], alertas=alertRes.data.values||[], empleados={}
-    empRows.slice(1).forEach(r=>{
-      const tel=normalizaTel(r[0])
-      if(tel)empleados[tel]={corto:r[1]||'',completo:r[3]||r[1]||'',suc:r[2]||''}
-    })
-    const porEmpleado={}
-    for(const f of asis){
-      const tel=normalizaTel(f[0]),fecha=String(f[2]||'').trim(),entrada=f[3]||''
-      if(!tel||!fecha||fecha<FECHA_CORTE_RETARDOS||!entrada)continue
-      const info=empleados[tel]||{}
-      const prog=baseMap[tel]?.horas?.[parseFechaDia(fecha)]
-      const ret=calcularRetardo(entrada,prog?.entrada)
-      if(ret>15){
-        if(!porEmpleado[tel])porEmpleado[tel]=[]
-        porEmpleado[tel].push({fecha,min:ret,nombre:info.corto||f[1]||tel,suc:info.suc||f[6]||''})
-      }
-    }
-    for(const tel of Object.keys(porEmpleado)){
-      const lista=porEmpleado[tel].sort((a,b)=>a.fecha.localeCompare(b.fecha))
-      const prev=alertas.slice(1).filter(r=>normalizaTel(r[0])===tel)
-      const ultimo=prev.length?prev[prev.length-1]:null
-      const desde=ultimo?.[4]?String(ultimo[4]).split(',').map(x=>x.trim()).filter(Boolean):[]
-      const nuevos=lista.filter(x=>!desde.includes(x.fecha))
-      if(nuevos.length<3)continue
-      const grupo=grupoGerentesPorSucursal(lista[0].suc)
-      if(!grupo)continue
-      const ultimos=nuevos.slice(0,3)
-      const nombre=lista[0].nombre
-      const detalle=ultimos.map(x=>`${x.fecha}: ${x.min} min`).join('\n')
-      try{
-        await sock.sendMessage(grupo,{text:`⚠️ *3 RETARDOS*\n\n${nombre}\n${detalle}\n\nFavor de revisar y dar seguimiento.`})
-        const fechas=[...desde,...ultimos.map(x=>x.fecha)]
-        await sClient.spreadsheets.values.append({
-          spreadsheetId:SPREADSHEET_ID,
-          range:`${HOJA_ALERTAS_RETARDOS}!A:E`,
-          valueInputOption:'USER_ENTERED',
-          requestBody:{values:[[tel,nombre,fechaActualMX(),3,fechas.join(', ')]]}
-        })
-      }catch(e){console.error('ERROR ALERTA 3 RETARDOS:',e.message)}
-    }
-  }catch(e){console.error('ERROR REVISAR 3 RETARDOS:',e)}
+function esSinSalida(row){
+  return String(row?.[8] || '').toUpperCase().includes('SIN SALIDA') ||
+         String(row?.[9] || '').toUpperCase().includes('AUTO 16H')
 }
 
-function parseFechaDia(fecha){
-  const d=new Date(`${fecha}T12:00:00`)
-  return d.getDay()
-}
+export async function handleChecador({ sock, jid, m, loc, rawLid, tel10, tel }){
+  const lat=loc.degreesLatitude
+  const lng=loc.degreesLongitude
 
-function fechaActualMX(){
-  return fechaLaboral(new Date())
-}
+  let cercana=null
+  let dMin=Infinity
 
-export async function handleChecador({sock,jid,m,loc,rawLid,tel10,tel}){
-  const lat=loc.degreesLatitude,lng=loc.degreesLongitude
-  let cercana=null,dMin=Infinity
   for(const s of SUCURSALES){
     const d=distM(lat,lng,s.lat,s.lng)
-    if(d<dMin){dMin=d;cercana=s}
+    if(d<dMin){
+      dMin=d
+      cercana=s
+    }
   }
 
   const empRows=await getRows('Empleados!A:K')
+
   const getLid=r=>(r.find(x=>String(x).includes('@lid'))||'').trim()
+
   let emp=null
-  tel10=normalizaTel(tel10||tel)
 
   if(tel10.length>=10){
-    const i=empRows.findIndex((r,idx)=>idx>0&&normalizaTel(r[0])===tel10)
-    if(i>-1)emp=empRows[i]
+    const i=empRows.findIndex((r,idx)=>
+      idx>0 &&
+      r[0] &&
+      r[0].replace(/\D/g,'').slice(-10)===tel10
+    )
+    if(i>-1) emp=empRows[i]
   }
 
-  if(!emp&&rawLid?.includes('@lid')){
-    const i=empRows.findIndex((r,idx)=>idx>0&&getLid(r)===rawLid)
+  if(!emp && rawLid.includes('@lid')){
+    const i=empRows.findIndex((r,idx)=>
+      idx>0 &&
+      getLid(r)===rawLid
+    )
+
     if(i>-1){
       emp=empRows[i]
-      tel10=normalizaTel(emp[0])
+      tel10=(emp[0]||'').replace(/\D/g,'').slice(-10)
     }
   }
 
-  const nombreCorto=emp?(emp[1]||emp[3]||tel10):(m.pushName||tel10||'Desconocido')
-  const nombreCompleto=emp?(emp[3]||emp[1]||nombreCorto):nombreCorto
-  const telF=emp?normalizaTel(emp[0]):normalizaTel(tel10||tel)
+  const nombre=emp?(emp[3]||emp[1]):(m.pushName||tel10||'Desconocido')
+  const telF=emp?(emp[0]||'').replace(/\D/g,''):tel
+  const tel10F=telF.slice(-10)||tel10
+
   const fLab=fechaLaboral()
   const asis=await getRows('Asistencia!A:M')
-  const idx=asis.findIndex((r,i)=>i>0&&normalizaTel(r[0])===telF&&r[2]===fLab)
+
+  const idx=asis.findIndex((r,i)=>
+    i>0 &&
+    r[0] &&
+    r[0].replace(/\D/g,'').slice(-10)===tel10F &&
+    r[2]===fLab
+  )
+
   const hoy=idx>-1?asis[idx]:null
 
   const sClient=await sheetsClient()
   const baseMap=await getHorarioBaseMap()
-  const base=baseMap[telF]||baseMap[normaliza(nombreCompleto).split(' ')[0]]||null
+  const base=
+    baseMap[tel10F]||
+    baseMap[normaliza(nombre).split(' ')[0]]||
+    null
 
-  let estatus='A TIEMPO',hObj=null,esRet=false,minRet=0,hProg=''
+  let estatus='A TIEMPO'
+  let hObj=null
+  let esRet=false
+  let minRet=0
+
   if(base){
-    const fe=new Date(fLab+'T12:00:00'),dn=fe.getDay()
-    if(base.descansos.has(dn))estatus='DESCANSO'
-    else if(base.horas[dn]){
-      hObj=base.horas[dn];hProg=hObj.entrada||''
-      if(hObj.entrada!=='LIBRE'&&hObj.entrada){
-        let ahora=minutos(horaMX()),prog=minutos(hObj.entrada)
-        if(ahora<300)ahora+=1440
-        if(prog<300)prog+=1440
-        const dif=ahora-prog
+    const fe=new Date(fLab+'T12:00:00')
+    const dn=fe.getDay()
+
+    if(base.descansos.has(dn)){
+      estatus='DESCANSO'
+    }else if(base.horas[dn]){
+      hObj=base.horas[dn]
+
+      if(hObj.entrada==='LIBRE'){
+        estatus='LIBRE'
+      }else if(hObj.entrada){
+        const dif=minutos(horaMX())-minutos(hObj.entrada)
+
         if(dif>TOLERANCIA_MIN){
           estatus=`RETARDO ${dif}min (Prog ${hObj.entrada})`
-          esRet=true;minRet=dif
-        }else estatus=`A TIEMPO (Prog ${hObj.entrada})`
+          esRet=true
+          minRet=dif
+        }else{
+          estatus=`A TIEMPO (Prog ${hObj.entrada})`
+        }
       }
     }
   }
 
   try{
-    if(!hoy||!hoy[3]){
+    // =========================
+    // ENTRADA
+    // =========================
+    if(!hoy || !hoy[3]){
+
       if(dMin>cercana.rEnt){
-        await sock.sendMessage(jid,{text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}`},{quoted:m})
+        await sock.sendMessage(
+          jid,
+          {text:`Debes estar a max ${cercana.rEnt}m de ${cercana.nombre}`},
+          {quoted:m}
+        )
         return
       }
 
       const h=horaMX()
-      const jTxt=hObj?`${hObj.entrada}${hObj.salida?` - ${hObj.salida}`:''}`:'8h'
-      const row=[telF,nombreCompleto,fLab,h,estatus,'',cercana.nombre,Math.round(dMin).toString(),'','',calcularHorasTrabajadas(h,''),'0',jTxt]
+
+      const jTxt=
+        hObj
+          ? `${hObj.entrada}${hObj.salida?` - ${hObj.salida}`:''}`
+          : '8h'
+
+      const row=[
+        tel10F,
+        nombre,
+        fLab,
+        h,
+        estatus,
+        '',
+        cercana.nombre,
+        Math.round(dMin).toString(),
+        '',
+        '',
+        esLibre(jTxt)?'0':calcularHorasTrabajadas(h,''),
+        '0',
+        jTxt
+      ]
 
       if(idx===-1){
         await sClient.spreadsheets.values.append({
@@ -234,110 +198,322 @@ export async function handleChecador({sock,jid,m,loc,rawLid,tel10,tel}){
         })
       }
 
-      await sock.sendMessage(jid,{text:`✅ ${estatus} - ${nombreCorto} en ${cercana.nombre} - ${h}`})
+      await sock.sendMessage(
+        jid,
+        {text:`✅ ${estatus} - ${nombre} en ${cercana.nombre} - ${h}`}
+      )
 
-      if(esRet){
-        const grupo=grupoGerentesPorSucursal(emp?.[2]||cercana.nombre)
-        if(grupo){
-          let extra60=''
-          if(minRet>=AVISO_RETARDO_60_MIN)extra60=`\n\n⚠️ Lleva ${minRet} min de retardo. Favor de confirmar si permanece a trabajar.`
-          await sock.sendMessage(grupo,{text:`⚠️ *RETARDO* - ${nombreCorto}\nProg: ${hProg}\nEntrada: ${h}\nRetardo: ${minRet} min\n[${emp?.[2]||cercana.nombre}]${extra60}`})
-        }
-      }
-
-      if(esRet)await revisarTresRetardos(sock)
-    }else{
-      if(hoy[5]){
-        await sock.sendMessage(jid,{text:`Salida ya registrada`})
-        return
-      }
-
-      if(dMin>cercana.rSal){
-        await sock.sendMessage(jid,{text:`No puedes checar salida a ${Math.round(dMin)}m`},{quoted:m})
-        return
-      }
-
-      const h=horaMX(),jTxt=hoy[12]||'8h'
-      const {trabajadas,extra}=calcularExtra(hoy[3],h,hObj?.entrada||null,hObj?.salida||null)
-
-      await sClient.spreadsheets.values.update({
-        spreadsheetId:SPREADSHEET_ID,
-        range:`Asistencia!F${idx+1}:M${idx+1}`,
-        valueInputOption:'USER_ENTERED',
-        requestBody:{values:[[h,hoy[6]||'',hoy[7]||'',cercana.nombre,Math.round(dMin).toString(),trabajadas,extra,jTxt]]}
-      })
-
-      await sock.sendMessage(jid,{text:`✅ Salida - ${nombreCorto} en ${cercana.nombre} - ${h}`})
+      return
     }
+
+    // =========================
+    // SALIDA
+    // =========================
+    if(hoy[5]){
+      await sock.sendMessage(
+        jid,
+        {text:`Salida ya registrada`}
+      )
+      return
+    }
+
+    if(dMin>cercana.rSal){
+      await sock.sendMessage(
+        jid,
+        {text:`No puedes checar salida a ${Math.round(dMin)}m`},
+        {quoted:m}
+      )
+      return
+    }
+
+    const h=horaMX()
+    const jTxt=hoy[12]||'8h'
+
+    let trabajadas='0'
+    let extra='0'
+
+    if(!esLibre(jTxt)){
+      const calc=calcularExtra(
+        hoy[3],
+        h,
+        hObj?.entrada||null,
+        hObj?.salida||null
+      )
+
+      trabajadas=calc.trabajadas
+      extra=calc.extra
+    }
+
+    await sClient.spreadsheets.values.update({
+      spreadsheetId:SPREADSHEET_ID,
+      range:`Asistencia!F${idx+1}:M${idx+1}`,
+      valueInputOption:'USER_ENTERED',
+      requestBody:{
+        values:[[
+          h,
+          hoy[6]||'',
+          hoy[7]||'',
+          cercana.nombre,
+          Math.round(dMin).toString(),
+          trabajadas,
+          extra,
+          jTxt
+        ]]
+      }
+    })
+
+    // No mostramos horas ni extra en WhatsApp
+    await sock.sendMessage(
+      jid,
+      {text:`✅ Salida - ${nombre} en ${cercana.nombre} - ${h}`}
+    )
+
   }catch(e){
     console.error('ERROR CHECADOR:',e)
   }
 }
 
-export async function checkNoLlegaron(sock){
+// ============================================================
+// CIERRE AUTOMÁTICO DESPUÉS DE 16 HORAS
+// ============================================================
+export async function cerrarSalidasPendientes(){
   try{
-    const hoy=fechaLaboral()
-    const ahora=horaMX()
-    const ahoraMinRaw=minutos(ahora)
-    let ahoraMin=ahoraMinRaw
-    if(ahoraMin<300)ahoraMin+=1440
-
+    const ahora=new Date()
+    const asis=await getRows('Asistencia!A:M')
+    const baseMap=await getHorarioBaseMap()
     const sClient=await sheetsClient()
-    const [baseRows,asisRows,empRows]=await Promise.all([
-      getRows('Horario_Base!A2:K'),
-      getRows('Asistencia!A2:M'),
-      getRows('Empleados!A:K')
-    ])
 
-    await asegurarHojaAvisos(sClient)
+    if(!asis || asis.length<=1) return
 
-    const empMap={}
-    empRows.slice(1).forEach(r=>{
-      const tel=normalizaTel(r[0])
-      if(tel)empMap[tel]={corto:r[1]||'',completo:r[3]||r[1]||'',suc:r[2]||''}
-    })
+    let cerrados=0
 
-    const diaNum=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})).getDay()
+    for(let i=1;i<asis.length;i++){
+      const r=asis[i]
 
-    for(const r of baseRows){
-      const tel=normalizaTel(r[0])
-      if(!tel)continue
+      if(!r || !r[0] || !r[2] || !r[3]) continue
 
-      const mapa={1:r[3],2:r[4],3:r[5],4:r[6],5:r[7],6:r[8],0:r[9]}
-      const v=(mapa[diaNum]||'').toString().trim()
-      const parsed=parseHorarioRango(v)
-      if(!parsed||parsed.entrada==='LIBRE'||!parsed.entrada)continue
+      // Ya tiene salida real o cierre automático
+      if(r[5] || esSinSalida(r)) continue
 
-      let progMin=minutos(parsed.entrada)
-      if(progMin<300)progMin+=1440
+      const tel=(r[0]||'').replace(/\D/g,'').slice(-10)
+      const nombre=r[1]||tel
+      const fecha=r[2]
+      const entrada=r[3]
+      const jornada=r[12]||''
 
-      const dif=ahoraMin-progMin
-      if(dif<AVISO_FALTA_MIN)continue
+      if(!tel || !fecha || !entrada) continue
 
-      const registro=asisRows.find(a=>normalizaTel(a[0])===tel&&a[2]===hoy&&a[3])
-      if(registro)continue
+      const entradaDate=fechaHoraMXDesdeFechaHora(fecha,entrada)
 
-      const yaAvisado=await yaAvisadoNoLlegada(sClient,tel,hoy)
-      if(yaAvisado)continue
+      if(isNaN(entradaDate.getTime())) continue
 
-      const info=empMap[tel]||{}
-      const nombreCorto=info.corto||r[1]||tel
-      const suc=info.suc||r[2]||''
-      const grupo=grupoGerentesPorSucursal(suc)
-      if(!grupo)continue
+      const minutosTranscurridos=minutosEntreFechas(
+        entradaDate,
+        ahora
+      )
 
-      const horaAviso=horaMX()
+      if(minutosTranscurridos < CIERRE_AUTO_HORAS*60) continue
 
+      // ======================================================
+      // LIBRE:
+      // SIN SALIDA pero 0 horas y 0 extra
+      // ======================================================
+      let trabajadas='0'
+      let extra='0'
+
+      if(!esLibre(jornada)){
+        const base=
+          baseMap[tel]||
+          baseMap[normaliza(nombre).split(' ')[0]]||
+          null
+
+        let horaProgramadaEntrada=null
+        let horaProgramadaSalida=null
+
+        if(base){
+          const fe=new Date(fecha+'T12:00:00')
+          const dn=fe.getDay()
+          const hObj=base.horas?.[dn]
+
+          if(hObj){
+            horaProgramadaEntrada=hObj.entrada||null
+            horaProgramadaSalida=hObj.salida||null
+          }
+        }
+
+        const cierreDate=new Date(
+          entradaDate.getTime()+
+          CIERRE_AUTO_HORAS*60*60*1000
+        )
+
+        const cierreHora=formatearHora(cierreDate)
+
+        const calc=calcularExtra(
+          entrada,
+          cierreHora,
+          horaProgramadaEntrada,
+          horaProgramadaSalida
+        )
+
+        trabajadas=calc.trabajadas
+        extra=calc.extra
+      }
+
+      const cierreDate=new Date(
+        entradaDate.getTime()+
+        CIERRE_AUTO_HORAS*60*60*1000
+      )
+
+      const cierreHora=formatearHora(cierreDate)
+
+      // F = salida automática
+      // I = SIN SALIDA
+      // J = AUTO 16H
+      // K = horas trabajadas
+      // L = extra
+      await sClient.spreadsheets.values.update({
+        spreadsheetId:SPREADSHEET_ID,
+        range:`Asistencia!F${i+1}:M${i+1}`,
+        valueInputOption:'USER_ENTERED',
+        requestBody:{
+          values:[[
+            cierreHora,
+            r[6]||'',
+            r[7]||'',
+            r[8]||'',
+            r[9]||'',
+            trabajadas,
+            extra,
+            r[12]||''
+          ]]
+        }
+      })
+
+      // Marcar SIN SALIDA / AUTO 16H
+      await sClient.spreadsheets.values.update({
+        spreadsheetId:SPREADSHEET_ID,
+        range:`Asistencia!I${i+1}:J${i+1}`,
+        valueInputOption:'USER_ENTERED',
+        requestBody:{
+          values:[[
+            'SIN SALIDA',
+            'AUTO 16H'
+          ]]
+        }
+      })
+
+      cerrados++
+
+      console.log(
+        `AUTO CIERRE 16H: ${nombre} ${fecha} entrada ${entrada} -> salida ${cierreHora} | Trab ${trabajadas} | Extra ${extra}`
+      )
+    }
+
+    if(cerrados){
+      console.log(`AUTO CIERRES REALIZADOS: ${cerrados}`)
+    }
+
+  }catch(e){
+    console.error('ERROR CIERRE AUTO 16H:',e)
+  }
+}
+
+// ============================================================
+// AVISO DE PERSONAS QUE NO HAN LLEGADO
+// ============================================================
+export async function checkNoLlegaron(sock){
+  const hoy=fechaLaboral()
+
+  if(fechaAvisos!==hoy){
+    avisosHoy.clear()
+    fechaAvisos=hoy
+  }
+
+  const ahoraMin=minutos(horaMX())
+
+  const baseRows=await getRows('Horario_Base!A2:K')
+  const asisRows=await getRows('Asistencia!A2:M')
+
+  const mxNow=new Date(
+    new Date().toLocaleString(
+      'en-US',
+      {timeZone:'America/Mexico_City'}
+    )
+  )
+
+  const diaNum=mxNow.getDay()
+
+  for(const r of baseRows){
+    const tel=(r[0]||'').replace(/\D/g,'').slice(-10)
+
+    if(!tel) continue
+
+    const key=`${hoy}_${tel}`
+
+    if(avisosHoy.has(key)) continue
+
+    const mapa={
+      1:r[3],
+      2:r[4],
+      3:r[5],
+      4:r[6],
+      5:r[7],
+      6:r[8],
+      0:r[9]
+    }
+
+    const v=(mapa[diaNum]||'').toString().trim()
+    const parsed=parseHorarioRango(v)
+
+    if(!parsed) continue
+    if(parsed.entrada==='LIBRE') continue
+    if(!parsed.entrada) continue
+
+    const dif=ahoraMin-minutos(parsed.entrada)
+
+    // Nunca avisar antes de la hora programada
+    if(dif<AVISO_FALTA_MIN) continue
+
+    const registro=asisRows.find(a=>
+      (a[0]||'').replace(/\D/g,'').slice(-10)===tel &&
+      a[2]===hoy &&
+      a[3]
+    )
+
+    if(registro) continue
+
+    avisosHoy.add(key)
+
+    const nombre=r[1]||tel
+    const sucId=(r[2]||'').toLowerCase()
+
+    let grupoAviso=null
+
+    if(
+      sucId.includes('coyo')||
+      sucId.includes('hotel')||
+      sucId.includes('trinidad')
+    ){
+      grupoAviso=GRUPO_CHECADOR_COYOACAN_ID
+    }else{
+      grupoAviso=GRUPO_CHECADOR_BUCARELI_ID
+    }
+
+    if(grupoAviso){
       try{
-        await sock.sendMessage(grupo,{
-          text:`⚠️ *NO HA LLEGADO* - ${nombreCorto}\nProg: ${parsed.entrada}\nMás de 20 min sin registrar entrada\n[${suc}]`
-        })
-        await registrarAvisoNoLlegada(sClient,tel,hoy,horaAviso,nombreCorto)
+        await sock.sendMessage(
+          grupoAviso,
+          {
+            text:
+              `⚠️ *NO HA LLEGADO* - ${nombre}\n`+
+              `Prog: ${parsed.entrada}\n`+
+              `Más de 20 min sin registrar entrada\n`+
+              `[${r[2]||''}]`
+          }
+        )
       }catch(e){
-        console.error('ERROR AVISO NO LLEGADA:',e.message)
+        console.error('ERROR AVISO NO LLEGADA:',e)
       }
     }
-  }catch(e){
-    console.error('ERROR CHECK NO LLEGARON:',e)
   }
 }
