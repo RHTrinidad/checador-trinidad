@@ -158,21 +158,31 @@ async function conectar(){
           }
 
           /*
+            ID DE GRUPO
+            Todos los grupos responden únicamente al comando exacto "id".
+          */
+
+          if(
+            jid.endsWith('@g.us')&&
+            texto.toLowerCase()==='id'
+          ){
+
+            await sock.sendMessage(jid,{
+              text:`🆔 ID DE ESTE GRUPO:\n${jid}`
+            })
+
+            continue
+          }
+
+          /*
             GRUPOS NUEVOS
-            Solo responden al comando exacto "id".
+            Si no están configurados, no hacen nada.
           */
 
           if(
             jid.endsWith('@g.us')&&
             !tipoGrupo
           ){
-
-            if(texto.toLowerCase()==='id'){
-              await sock.sendMessage(jid,{
-                text:`🆔 ID DE ESTE GRUPO:\n${jid}`
-              })
-            }
-
             continue
           }
 
@@ -202,7 +212,9 @@ async function conectar(){
           */
 
           if(
-            (tipoGrupo==='REPORTES'||tipoGrupo==='GERENTES')&&
+            (tipoGrupo==='REPORTES'||
+             tipoGrupo==='GERENTES'||
+             tipoGrupo==='COMPRAS')&&
             esImagen
           ){
 
@@ -222,7 +234,9 @@ async function conectar(){
           */
 
           if(
-            (tipoGrupo==='REPORTES'||tipoGrupo==='GERENTES')&&
+            (tipoGrupo==='REPORTES'||
+             tipoGrupo==='GERENTES'||
+             tipoGrupo==='COMPRAS')&&
             (
               esImagen||
               esPDF||
@@ -258,7 +272,8 @@ async function conectar(){
           */
 
           if(
-            (tipoGrupo==='REPORTES'||tipoGrupo==='GERENTES')&&
+            (tipoGrupo==='REPORTES'||
+             tipoGrupo==='GERENTES')&&
             COMANDOS_REPORTES.test(texto)
           ){
 
