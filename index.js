@@ -310,9 +310,7 @@ async function conectar(){
               !!m.message?.imageMessage
 
             /*
-              PDF
-              Se identifica desde ahora para
-              el siguiente paso de Compras.
+              DOCUMENTO / PDF
             */
 
             const esDocumento=
@@ -327,6 +325,12 @@ async function conectar(){
               )
                 .toLowerCase()===
                 'application/pdf'
+
+            /*
+              =================================================
+              CHECADOR
+              =================================================
+            */
 
             if(
               tipoGrupo===
@@ -362,8 +366,11 @@ async function conectar(){
               PAGOS
               =================================================
 
-              Se mantiene ANTES de Compras para que un
-              comprobante de pago no termine como compra.
+              Los pagos siguen pasando ANTES de Compras.
+
+              IMPORTANTE:
+              Solo las IMAGENES pasan por el lector de pagos.
+              Los PDF se mantienen en Compras.
             */
 
             if(
@@ -394,11 +401,14 @@ async function conectar(){
               COMPRAS
               =================================================
 
-              Las fotografías siguen exactamente la misma
-              entrada.
+              FOTO:
+              compras.js agrupa fotografías consecutivas.
 
-              compras.js ahora se encarga de agrupar varias
-              fotografías consecutivas.
+              PDF:
+              compras.js descarga y analiza el PDF.
+
+              COMANDO:
+              compras reportes siguen funcionando.
             */
 
             if(
@@ -408,6 +418,7 @@ async function conectar(){
               )&&
               (
                 esImagen||
+                esPDF||
                 /^compras\b/i.test(texto)
               )
             ){
@@ -418,7 +429,8 @@ async function conectar(){
                 jid,
                 m,
                 texto,
-                esImagen
+                esImagen,
+                esPDF
 
               })
 
