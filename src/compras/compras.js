@@ -1,631 +1,204 @@
-import {downloadMediaMessage} from '@whiskeysockets/baileys'
-import P from 'pino'
-import {
-  SPREADSHEET_COMPRAS_ID,
-  SHEET_RESUMEN,
-  SHEET_INSUMOS,
-  GRUPO_PRUEBAS_ID
-} from '../config.js'
-import {fechaLaboral,normaliza} from '../utils.js'
-import {sheetsClient,getRows} from '../sheets.js'
-import ExcelJS from 'exceljs'
-import fs from 'fs'
-import path from 'path'
-import os from 'os'
-import crypto from 'crypto'
+import{downloadMediaMessage}from'@whiskeysockets/baileys'
+import P from'pino'
+import{SPREADSHEET_COMPRAS_ID,SHEET_RESUMEN,SHEET_INSUMOS,GRUPO_PRUEBAS_ID}from'../config.js'
+import{fechaLaboral,normaliza}from'../utils.js'
+import{sheetsClient,getRows}from'../sheets.js'
+import ExcelJS from'exceljs'
+import fs from'fs'
+import path from'path'
+import os from'os'
+import crypto from'crypto'
 
 const OPENAI_API_KEY=process.env.OPENAI_API_KEY
-
-/*
-  ============================================================
-  AGRUPADOR DE FOTOS
-  ============================================================
-*/
-
 const colasFotos=new Map()
 const hashesRecientes=new Map()
-
 const TIEMPO_AGRUPACION=5000
 const TIEMPO_HASH_RECIENTE=15*60*1000
 
 function hashBuffer(buffer){
-  return crypto
-    .createHash('sha256')
-    .update(buffer)
-    .digest('hex')
+  return crypto.createHash('sha256').update(buffer).digest('hex')
 }
 
 function limpiarHashesRecientes(){
-
   const ahora=Date.now()
-
-  for(const [hash,fecha] of hashesRecientes){
-
-    if(ahora-fecha>TIEMPO_HASH_RECIENTE){
-      hashesRecientes.delete(hash)
-    }
+  for(const[hash,fecha]of hashesRecientes){
+    if(ahora-fecha>TIEMPO_HASH_RECIENTE)hashesRecientes.delete(hash)
   }
 }
 
-async function agregarFotoACola({
-  sock,
-  jid,
-  m,
-  texto
-}){
-
+async function agregarFotoACola({sock,jid,m,texto}){
   try{
-
-    const buffer=await downloadMediaMessage(
-      m,
-      'buffer',
-      {},
-      {
-        logger:P({level:'fatal'}),
-        reuploadRequest:sock.updateMediaMessage
-      }
-    )
-
-    limpiarHashesRecientes()
-
-    const hash=hashBuffer(buffer)
-
-    if(hashesRecientes.has(hash)){
-
-      console.log(
-        'Foto duplicada ignorada:',
-        jid
-      )
-
-      return false
-    }
-
-    hashesRecientes.set(
-      hash,
-      Date.now()
-    )
-
-    let cola=colasFotos.get(jid)
-
-    if(!cola){
-
-      cola={
-        items:[],
-        timer:null
-      }
-
-      colasFotos.set(
-        jid,
-        cola
-      )
-    }
-
-    if(
-      cola.items.some(
-        x=>x.hash===hash
-      )
-    ){
-      return false
-    }
-
-    cola.items.push({
-      buffer,
-      hash,
-      texto
+    const buffer=await downloadMediaMessage(m,'buffer',{},{
+      logger:P({level:'fatal'}),
+      reuploadRequest:sock.updateMediaMessage
     })
-
-    if(cola.timer){
-      clearTimeout(
-        cola.timer
-      )
+    limpiarHashesRecientes()
+    const hash=hashBuffer(buffer)
+    if(hashesRecientes.has(hash)){
+      console.log('Foto duplicada ignorada:',jid)
+      return false
     }
-
-    cola.timer=setTimeout(
-      ()=>procesarColaFotos(jid,sock),
-      TIEMPO_AGRUPACION
-    )
-
+    hashesRecientes.set(hash,Date.now())
+    let cola=colasFotos.get(jid)
+    if(!cola){
+      cola={items:[],timer:null}
+      colasFotos.set(jid,cola)
+    }
+    if(cola.items.some(x=>x.hash===hash))return false
+    cola.items.push({buffer,hash,texto})
+    if(cola.timer)clearTimeout(cola.timer)
+    cola.timer=setTimeout(()=>procesarColaFotos(jid,sock),TIEMPO_AGRUPACION)
     return true
-
   }catch(e){
-
-    console.error(
-      'Error agregando foto a cola:',
-      e
-    )
-
-    await sock.sendMessage(
-      jid,
-      {
-        text:
-          '❌ No pude recibir correctamente la fotografía.'
-      }
-    )
-
+    console.error('Error agregando foto a cola:',e)
+    await sock.sendMessage(jid,{text:'❌ No pude recibir correctamente la fotografía.'})
     return true
   }
 }
 
-async function procesarColaFotos(
-  jid,
-  sock
-){
-
+async function procesarColaFotos(jid,sock){
   const cola=colasFotos.get(jid)
-
-  if(
-    !cola||
-    !cola.items.length
-  ){
-    return
-  }
-
-  colasFotos.delete(
-    jid
-  )
-
+  if(!cola||!cola.items.length)return
+  colasFotos.delete(jid)
   try{
-
-    const buffers=
-      cola.items.map(
-        x=>x.buffer
-      )
-
-    const datosIA=
-      await leerTicketsConOpenAI(
-        buffers
-      )
-
-    await registrarDocumentosIA(
-      jid,
-      sock,
-      datosIA,
-      'fotografías'
-    )
-
+    const buffers=cola.items.map(x=>x.buffer)
+    const datosIA=await leerTicketsConOpenAI(buffers)
+    await registrarDocumentosIA(jid,sock,datosIA,'fotografías')
   }catch(e){
-
-    console.error(
-      'Error procesando lote de compras:',
-      e
-    )
-
-    await sock.sendMessage(
-      jid,
-      {
-        text:
-          '❌ Error al procesar las fotografías: '+
-          e.message
-      }
-    )
+    console.error('Error procesando lote de compras:',e)
+    await sock.sendMessage(jid,{text:'❌ Error al procesar las fotografías: '+e.message})
   }
 }
 
-/*
-  ============================================================
-  PROCESAR DOCUMENTOS IA
-  ============================================================
-*/
-
-async function registrarDocumentosIA(
-  jid,
-  sock,
-  datosIA,
-  tipoEntrada
-){
-
+async function registrarDocumentosIA(jid,sock,datosIA,tipoEntrada){
   try{
-
-    if(
-      !datosIA||
-      !Array.isArray(datosIA)||
-      !datosIA.length
-    ){
-
-      await sock.sendMessage(
-        jid,
-        {
-          text:
-            `❌ No pude identificar la factura. Manda ${tipoEntrada} nuevamente con mayor claridad.`
-        }
-      )
-
+    if(!datosIA||!Array.isArray(datosIA)||!datosIA.length){
+      await sock.sendMessage(jid,{text:`❌ No pude identificar la factura. Manda ${tipoEntrada} nuevamente con mayor claridad.`})
       return
     }
 
-    const fechaCaptura=
-      fechaLaboral()
+    const fechaCaptura=fechaLaboral()
+    let registros=0,duplicados=0,totalInsumos=0
 
-    let registros=0
-    let duplicados=0
-    let totalInsumos=0
-
-    for(
-      const documento of datosIA
-    ){
-
-      if(
-        !documento||
-        documento.importe_total==='0'||
-        !documento.importe_total
-      ){
-        continue
-      }
+    for(const documento of datosIA){
+      if(!documento||documento.importe_total==='0'||!documento.importe_total)continue
 
       const datosFinal={
-
-        folio:
-          documento.folio||'',
-
-        concepto:
-          documento.concepto_sugerido||'',
-
-        proveedor:
-          documento.proveedor||'',
-
-        monto:
-          documento.importe_total,
-
+        folio:documento.folio||'',
+        concepto:documento.concepto_sugerido||'',
+        proveedor:documento.proveedor||'',
+        monto:documento.importe_total,
         fechaCaptura,
-
-        fechaDocumento:
-          documento.fecha_ticket||'',
-
-        sucursal:
-          documento.sucursal||'',
-
-        semana:
-          obtenerSemanaCompras(
-            fechaCaptura
-          ),
-
-        area:
-          documento.area||'',
-
-        pagado:
-          documento.pagado===true,
-
-        productos:
-          documento.productos
-
+        fechaDocumento:documento.fecha_ticket||'',
+        sucursal:documento.sucursal||'',
+        semana:obtenerSemanaCompras(fechaCaptura),
+        area:documento.area||'',
+        pagado:documento.pagado===true,
+        productos:documento.productos
       }
 
-      const res=
-        await registrarCompra(
-          datosFinal
-        )
-
+      const res=await registrarCompra(datosFinal)
       registros++
-
-      if(
-        res.duplicado
-      ){
-        duplicados++
-      }
-
-      totalInsumos+=
-        Array.isArray(
-          datosFinal.productos
-        )
-          ?datosFinal.productos.length
-          :1
+      if(res.duplicado)duplicados++
+      totalInsumos+=Array.isArray(datosFinal.productos)?datosFinal.productos.length:1
     }
 
     if(!registros){
-
-      await sock.sendMessage(
-        jid,
-        {
-          text:
-            `❌ No pude leer el total de ninguna factura. Manda ${tipoEntrada} nuevamente con mayor claridad.`
-        }
-      )
-
+      await sock.sendMessage(jid,{text:`❌ No pude leer el total de ninguna factura. Manda ${tipoEntrada} nuevamente con mayor claridad.`})
       return
     }
 
-    let mensaje=
-      registros===1
-        ?'✅ Compra registrada correctamente.'
-        :`✅ ${registros} compras registradas correctamente.`
+    let mensaje=registros===1?'✅ Compra registrada correctamente.':`✅ ${registros} compras registradas correctamente.`
+    if(totalInsumos)mensaje+=`\n📦 ${totalInsumos} insumos registrados.`
+    if(duplicados)mensaje+=`\n⚠️ ${duplicados} posible(s) duplicado(s) — fila(s) marcada(s) en amarillo.`
 
-    if(totalInsumos){
-
-      mensaje+=
-        `\n📦 ${totalInsumos} insumos registrados.`
-    }
-
-    if(duplicados){
-
-      mensaje+=
-        `\n⚠️ ${duplicados} posible(s) duplicado(s) — fila(s) marcada(s) en amarillo.`
-    }
-
-    await sock.sendMessage(
-      jid,
-      {
-        text:mensaje
-      }
-    )
-
+    await sock.sendMessage(jid,{text:mensaje})
   }catch(e){
-
-    console.error(
-      'Error registrando documentos IA:',
-      e
-    )
-
-    await sock.sendMessage(
-      jid,
-      {
-        text:
-          '❌ Error al registrar la compra: '+
-          e.message
-      }
-    )
+    console.error('Error registrando documentos IA:',e)
+    await sock.sendMessage(jid,{text:'❌ Error al registrar la compra: '+e.message})
   }
 }
-
-/*
-  ============================================================
-  CATALOGO DE CONCEPTOS
-  ============================================================
-*/
 
 async function obtenerConceptosCatalogo(){
-
   try{
-
-    const rows=await getRows(
-      'lista Proveedores!J2:J',
-      SPREADSHEET_COMPRAS_ID
-    )
-
+    const rows=await getRows('lista Proveedores!J2:J',SPREADSHEET_COMPRAS_ID)
     const conceptos=[]
-
-    for(
-      const row of rows
-    ){
-
-      const concepto=
-        (row[0]||'')
-          .toString()
-          .trim()
-
-      if(!concepto)
-        continue
-
-      conceptos.push(
-        concepto
-      )
+    for(const row of rows){
+      const concepto=(row[0]||'').toString().trim()
+      if(concepto)conceptos.push(concepto)
     }
-
     return conceptos
-
   }catch(e){
-
-    console.log(
-      'Error leyendo conceptos de lista Proveedores:',
-      e.message
-    )
-
-    return []
+    console.log('Error leyendo conceptos de lista Proveedores:',e.message)
+    return[]
   }
 }
 
-function obtenerConceptoValido(
-  valor,
-  conceptosValidos
-){
-
-  const x=
-    normaliza(valor||'')
-      .toUpperCase()
-      .trim()
-
-  if(!x)
-    return ''
-
-  const encontrado=
-    conceptosValidos.find(
-      c=>
-        normaliza(c)
-          .toUpperCase()===x
-    )
-
+function obtenerConceptoValido(valor,conceptosValidos){
+  const x=normaliza(valor||'').toUpperCase().trim()
+  if(!x)return''
+  const encontrado=conceptosValidos.find(c=>normaliza(c).toUpperCase()===x)
   return encontrado||''
 }
 
-function obtenerSucursalValida(
-  valor
-){
-
-  const x=
-    normaliza(valor||'')
-      .toUpperCase()
-      .trim()
-
-  if(!x)
-    return ''
-
-  if(
-    x==='BUCARELI'||
-    x.includes('BUCARELI')
-  ){
-
-    return 'BUCARELI'
-  }
-
-  if(
-    x==='COYOACAN'||
-    x.includes('COYOACAN')||
-    x.includes('COYOACÁN')
-  ){
-
-    return 'COYOACAN'
-  }
-
-  return ''
+function obtenerSucursalValida(valor){
+  const x=normaliza(valor||'').toUpperCase().trim()
+  if(!x)return''
+  if(x==='BUCARELI'||x.includes('BUCARELI'))return'BUCARELI'
+  if(x==='COYOACAN'||x.includes('COYOACAN')||x.includes('COYOACÁN'))return'COYOACAN'
+  return''
 }
 
-function obtenerSemanaCompras(
-  fecha
-){
-
-  const d=
-    new Date(
-      `${fecha}T12:00:00`
-    )
-
-  if(
-    Number.isNaN(
-      d.getTime()
-    )
-  ){
-    return ''
-  }
-
-  const anio=
-    d.getFullYear()
-
-  const inicioAnio=
-    new Date(
-      anio,
-      0,
-      1,
-      12
-    )
-
-  const diaSemana=
-    inicioAnio.getDay()
-
-  const diasDesdeMartes=
-    (diaSemana-2+7)%7
-
-  const inicioSemana01=
-    new Date(
-      inicioAnio
-    )
-
-  inicioSemana01.setDate(
-    inicioSemana01.getDate()-
-    diasDesdeMartes
-  )
-
-  const diferenciaDias=
-    Math.floor(
-      (d-inicioSemana01)/
-      86400000
-    )
-
-  const numeroSemana=
-    Math.floor(
-      diferenciaDias/7
-    )+1
-
-  return(
-    `${String(numeroSemana).padStart(2,'0')}-`+
-    `${String(anio).slice(-2)}`
-  )
+function obtenerSemanaCompras(fecha){
+  const d=new Date(`${fecha}T12:00:00`)
+  if(Number.isNaN(d.getTime()))return''
+  const anio=d.getFullYear()
+  const inicioAnio=new Date(anio,0,1,12)
+  const diaSemana=inicioAnio.getDay()
+  const diasDesdeMartes=(diaSemana-2+7)%7
+  const inicioSemana01=new Date(inicioAnio)
+  inicioSemana01.setDate(inicioSemana01.getDate()-diasDesdeMartes)
+  const diferenciaDias=Math.floor((d-inicioSemana01)/86400000)
+  const numeroSemana=Math.floor(diferenciaDias/7)+1
+  return`${String(numeroSemana).padStart(2,'0')}-${String(anio).slice(-2)}`
 }
 
-async function buscarProveedorCatalogo(
-  nombre
-){
-
+async function buscarProveedorCatalogo(nombre){
   try{
+    const rows=await getRows('lista Proveedores!A2:A',SPREADSHEET_COMPRAS_ID)
+    const buscado=normaliza(nombre||'').toUpperCase().trim()
+    if(!buscado)return'PROVEEDOR OCASIONAL'
 
-    const rows=
-      await getRows(
-        'lista Proveedores!A2:A',
-        SPREADSHEET_COMPRAS_ID
-      )
-
-    const buscado=
-      normaliza(nombre||'')
-        .toUpperCase()
-        .trim()
-
-    if(!buscado)
-      return 'PROVEEDOR OCASIONAL'
-
-    for(
-      const row of rows
-    ){
-
-      const oficial=
-        (row[0]||'')
-          .toString()
-          .trim()
-
-      if(!oficial)
-        continue
-
-      const normalizado=
-        normaliza(oficial)
-          .toUpperCase()
-
-      if(
-        normalizado===buscado||
-        normalizado.includes(buscado)||
-        buscado.includes(normalizado)
-      ){
-
-        return oficial
-      }
+    for(const row of rows){
+      const oficial=(row[0]||'').toString().trim()
+      if(!oficial)continue
+      const normalizado=normaliza(oficial).toUpperCase()
+      if(normalizado===buscado||normalizado.includes(buscado)||buscado.includes(normalizado))return oficial
     }
-
-    return 'PROVEEDOR OCASIONAL'
-
+    return'PROVEEDOR OCASIONAL'
   }catch(e){
-
-    console.log(
-      'Error lista Proveedores:',
-      e.message
-    )
-
-    return 'PROVEEDOR OCASIONAL'
+    console.log('Error lista Proveedores:',e.message)
+    return'PROVEEDOR OCASIONAL'
   }
 }
 
-/*
-  ============================================================
-  OPENAI FOTOS
-  ============================================================
-*/
-
-async function leerTicketsConOpenAI(
-  buffers
-){
-
+async function leerTicketsConOpenAI(buffers){
   try{
+    const conceptosValidos=await obtenerConceptosCatalogo()
+    const listaConceptos=conceptosValidos.length>0?conceptosValidos.join(', '):'(NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J)'
 
-    const conceptosValidos=
-      await obtenerConceptosCatalogo()
-
-    const listaConceptos=
-      conceptosValidos.length>0
-        ?conceptosValidos.join(', ')
-        :'(NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J)'
-
-    const contenido=[
-
-      {
-        type:'text',
-
-        text:`Eres lector de comprobantes de compras para restaurante Trinidad.
+    const contenido=[{
+      type:'text',
+      text:`Eres lector de comprobantes de compras para restaurante Trinidad.
 
 Recibirás una o varias fotografías.
 
 IMPORTANTE:
 Las fotografías pueden ser páginas diferentes de UNA MISMA FACTURA.
-
 También pueden existir VARIAS FACTURAS diferentes dentro del conjunto.
-
 Debes identificar correctamente cada documento.
 
 Devuelve SOLO JSON válido:
-
 {
   "documentos":[
     {
@@ -654,13 +227,12 @@ CONCEPTOS DISPONIBLES EN GOOGLE SHEETS:
 ${listaConceptos}
 
 REGLAS PARA AGRUPAR:
-
 - Si varias fotografías muestran distintas partes o páginas de LA MISMA FACTURA, deben formar UN SOLO documento.
 - NO crees una factura nueva solamente porque aparezca otra página.
 - Une TODOS los productos visibles de las diferentes fotografías de la misma factura.
 - Si una misma línea aparece repetida porque dos fotografías muestran la misma zona, NO la dupliques.
 - Si una fotografía es exactamente la misma página repetida, no dupliques sus productos.
-- Si existen facturas diferentes, crea un documento independiente para cada factura.
+- Si existen facturas diferentes, crea un documento independiente para cada una.
 - Un cambio claro de folio, total, proveedor o documento significa que probablemente es otra factura.
 - NO inventes información.
 
@@ -694,26 +266,15 @@ REGLAS DE AREA:
 
 REGLAS DE SUCURSAL:
 La sucursal se determina UNICAMENTE mediante SELLO DE SUCURSAL visible.
-
 - BUCARELI → "BUCARELI"
 - COYOACAN o COYOACÁN → "COYOACAN"
 - Sin sello claramente visible → ""
-
-NO deduzcas sucursal por:
-- proveedor
-- dirección
-- RFC
-- teléfono
-- encabezado
-- domicilio
-- texto de factura
-- grupo de WhatsApp
+NO deduzcas sucursal por proveedor, dirección, RFC, teléfono, encabezado, domicilio, texto de factura o grupo de WhatsApp.
 
 REGLAS DE PAGADO:
 - true únicamente si se observa claramente PAGADO, sello de pagado o evidencia equivalente.
 - No marques pagado por suposición.
 - Sello de sucursal y sello de PAGADO son independientes.
-- Un sello de sucursal NO significa PAGADO.
 
 REGLAS DE PRODUCTOS:
 - Extrae TODOS los productos visibles de TODAS las páginas correspondientes a esa factura.
@@ -727,181 +288,66 @@ Si una factura ocupa 4 fotografías:
 → 1 solo documento
 → 1 solo registro en Resumen Compras
 → TODOS sus productos en Insumos.`
-      }
+    }]
 
-    ]
-
-    for(
-      const buffer of buffers
-    ){
-
+    for(const buffer of buffers){
       contenido.push({
-
         type:'image_url',
-
-        image_url:{
-          url:
-            `data:image/jpeg;base64,`+
-            buffer.toString('base64')
-        }
+        image_url:{url:`data:image/jpeg;base64,${buffer.toString('base64')}`}
       })
     }
 
-    const res=
-      await fetch(
-        'https://api.openai.com/v1/chat/completions',
-        {
-          method:'POST',
+    const res=await fetch('https://api.openai.com/v1/chat/completions',{
+      method:'POST',
+      headers:{
+        Authorization:`Bearer ${OPENAI_API_KEY}`,
+        'Content-Type':'application/json'
+      },
+      body:JSON.stringify({
+        model:'gpt-4o',
+        messages:[{role:'user',content:contenido}],
+        max_tokens:3000,
+        temperature:0.1
+      })
+    })
 
-          headers:{
-            'Authorization':
-              `Bearer ${OPENAI_API_KEY}`,
-            'Content-Type':
-              'application/json'
-          },
-
-          body:JSON.stringify({
-
-            model:'gpt-4o',
-
-            messages:[
-              {
-                role:'user',
-                content:contenido
-              }
-            ],
-
-            max_tokens:3000,
-            temperature:0.1
-          })
-        }
-      )
-
-    const data=
-      await res.json()
+    const data=await res.json()
 
     if(!res.ok){
-
-      console.log(
-        'OpenAI COMPRAS FOTO ERROR:',
-        data
-      )
-
+      console.log('OpenAI COMPRAS FOTO ERROR:',data)
       return null
     }
 
-    const content=
-      data.choices?.[0]?.message?.content||
-      ''
+    const content=data.choices?.[0]?.message?.content||''
+    console.log('OpenAI COMPRAS RAW:',content)
 
-    console.log(
-      'OpenAI COMPRAS RAW:',
-      content
-    )
+    const match=content.match(/\{[\s\S]*\}/)
+    if(!match)return null
 
-    const match=
-      content.match(
-        /\{[\s\S]*\}/
-      )
+    const json=JSON.parse(match[0])
+    const documentos=Array.isArray(json.documentos)?json.documentos:[]
 
-    if(!match)
-      return null
-
-    const json=
-      JSON.parse(
-        match[0]
-      )
-
-    const documentos=
-      Array.isArray(
-        json.documentos
-      )
-        ?json.documentos
-        :[]
-
-    return documentos.map(
-      documento=>({
-
-        proveedor:
-          documento.proveedor||'',
-
-        folio:
-          documento.folio||'',
-
-        importe_total:
-          (documento.importe_total||'0')
-            .toString()
-            .replace(/,/g,''),
-
-        fecha_ticket:
-          documento.fecha_ticket||'',
-
-        concepto_sugerido:
-          obtenerConceptoValido(
-            documento.concepto,
-            conceptosValidos
-          ),
-
-        area:
-          ['COCINA','BARRA','GASTOS'].includes(
-            (documento.area||'')
-              .toString()
-              .toUpperCase()
-          )
-            ?documento.area
-              .toString()
-              .toUpperCase()
-            :'',
-
-        sucursal:
-          obtenerSucursalValida(
-            documento.sucursal
-          ),
-
-        pagado:
-          documento.pagado===true,
-
-        productos:
-          Array.isArray(
-            documento.productos
-          )
-            ?documento.productos
-            :[]
-
-      })
-    )
-
+    return documentos.map(documento=>({
+      proveedor:documento.proveedor||'',
+      folio:documento.folio||'',
+      importe_total:(documento.importe_total||'0').toString().replace(/,/g,''),
+      fecha_ticket:documento.fecha_ticket||'',
+      concepto_sugerido:obtenerConceptoValido(documento.concepto,conceptosValidos),
+      area:['COCINA','BARRA','GASTOS'].includes((documento.area||'').toString().toUpperCase())?documento.area.toString().toUpperCase():'',
+      sucursal:obtenerSucursalValida(documento.sucursal),
+      pagado:documento.pagado===true,
+      productos:Array.isArray(documento.productos)?documento.productos:[]
+    }))
   }catch(e){
-
-    console.log(
-      'OpenAI FOTO fail:',
-      e.message
-    )
-
+    console.log('OpenAI FOTO fail:',e.message)
     return null
   }
 }
 
-/*
-  ============================================================
-  OPENAI PDF
-  ============================================================
-*/
-
-async function leerPDFConOpenAI(
-  buffer,
-  nombreArchivo='comprobante.pdf'
-){
-
+async function leerPDFConOpenAI(buffer,nombreArchivo='comprobante.pdf'){
   try{
-
-    const conceptosValidos=
-      await obtenerConceptosCatalogo()
-
-    const listaConceptos=
-      conceptosValidos.length>0
-        ?conceptosValidos.join(', ')
-        :'(NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J)'
+    const conceptosValidos=await obtenerConceptosCatalogo()
+    const listaConceptos=conceptosValidos.length>0?conceptosValidos.join(', '):'(NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J)'
 
     const prompt=`Eres lector de comprobantes de compras para restaurante Trinidad.
 
@@ -919,7 +365,7 @@ IMPORTANTE:
 - Si existen varias facturas realmente diferentes, crea un documento independiente para cada una.
 - No inventes información.
 
-Devuelve SOLO JSON válido:
+Devuelve SOLO JSON válido, sin markdown ni explicaciones:
 
 {
   "documentos":[
@@ -979,7 +425,6 @@ REGLAS DE AREA:
 
 REGLAS DE SUCURSAL:
 La sucursal se determina UNICAMENTE mediante SELLO DE SUCURSAL visible.
-
 - BUCARELI → "BUCARELI"
 - COYOACAN o COYOACÁN → "COYOACAN"
 - Sin sello claramente visible → ""
@@ -1014,709 +459,290 @@ Si el PDF tiene 4 páginas de UNA factura:
 → 1 solo registro en Resumen Compras
 → TODOS sus productos en Insumos.`
 
-    const base64=
-      buffer.toString(
-        'base64'
-      )
+    const base64=buffer.toString('base64')
 
-    const res=
-      await fetch(
-        'https://api.openai.com/v1/responses',
-        {
-          method:'POST',
+    const res=await fetch('https://api.openai.com/v1/responses',{
+      method:'POST',
+      headers:{
+        Authorization:`Bearer ${OPENAI_API_KEY}`,
+        'Content-Type':'application/json'
+      },
+      body:JSON.stringify({
+        model:'gpt-4o',
+        input:[{
+          role:'user',
+          content:[
+            {type:'input_text',text:prompt},
+            {
+              type:'input_file',
+              filename:nombreArchivo||'comprobante.pdf',
+              file_data:`data:application/pdf;base64,${base64}`
+            }
+          ]
+        }],
+        temperature:0.1
+      })
+    })
 
-          headers:{
-            'Authorization':
-              `Bearer ${OPENAI_API_KEY}`,
-            'Content-Type':
-              'application/json'
-          },
-
-          body:JSON.stringify({
-
-            model:'gpt-4o',
-
-            input:[
-              {
-                role:'user',
-
-                content:[
-
-                  {
-                    type:'input_text',
-                    text:prompt
-                  },
-
-                  {
-                    type:'input_file',
-
-                    filename:
-                      nombreArchivo||'comprobante.pdf',
-
-                    file_data:
-                      `data:application/pdf;base64,${base64}`
-                  }
-
-                ]
-              }
-            ]
-          })
-        }
-      )
-
-    const data=
-      await res.json()
+    const data=await res.json()
 
     if(!res.ok){
-
-      console.log(
-        'OpenAI PDF ERROR:',
-        data
-      )
-
+      console.log('OpenAI PDF ERROR:',JSON.stringify(data,null,2))
       return null
     }
 
-    const content=
-      data.output_text||
-      ''
+    let content=data.output_text||''
 
-    console.log(
-      'OpenAI COMPRAS PDF RAW:',
-      content
-    )
+    if(!content){
+      const textos=[]
+      for(const item of(data.output||[])){
+        for(const c of(item.content||[])){
+          if(c.type==='output_text'&&c.text)textos.push(c.text)
+        }
+      }
+      content=textos.join('\n')
+    }
 
-    const match=
-      content.match(
-        /\{[\s\S]*\}/
-      )
+    console.log('OpenAI COMPRAS PDF RAW:',content)
 
-    if(!match)
+    if(!content){
+      console.log('OpenAI COMPRAS PDF RESPONSE:',JSON.stringify(data,null,2))
       return null
+    }
 
-    const json=
-      JSON.parse(
-        match[0]
-      )
+    const match=content.match(/\{[\s\S]*\}/)
 
-    const documentos=
-      Array.isArray(
-        json.documentos
-      )
-        ?json.documentos
-        :[]
+    if(!match){
+      console.log('OpenAI PDF SIN JSON:',content)
+      return null
+    }
 
-    return documentos.map(
-      documento=>({
+    let json
 
-        proveedor:
-          documento.proveedor||'',
+    try{
+      json=JSON.parse(match[0])
+    }catch(e){
+      console.log('OpenAI PDF JSON ERROR:',e.message,content)
+      return null
+    }
 
-        folio:
-          documento.folio||'',
+    const documentos=Array.isArray(json.documentos)?json.documentos:[]
 
-        importe_total:
-          (documento.importe_total||'0')
-            .toString()
-            .replace(/,/g,''),
-
-        fecha_ticket:
-          documento.fecha_ticket||'',
-
-        concepto_sugerido:
-          obtenerConceptoValido(
-            documento.concepto,
-            conceptosValidos
-          ),
-
-        area:
-          ['COCINA','BARRA','GASTOS'].includes(
-            (documento.area||'')
-              .toString()
-              .toUpperCase()
-          )
-            ?documento.area
-              .toString()
-              .toUpperCase()
-            :'',
-
-        sucursal:
-          obtenerSucursalValida(
-            documento.sucursal
-          ),
-
-        pagado:
-          documento.pagado===true,
-
-        productos:
-          Array.isArray(
-            documento.productos
-          )
-            ?documento.productos
-            :[]
-
-      })
-    )
-
+    return documentos.map(documento=>({
+      proveedor:documento.proveedor||'',
+      folio:documento.folio||'',
+      importe_total:(documento.importe_total||'0').toString().replace(/,/g,''),
+      fecha_ticket:documento.fecha_ticket||'',
+      concepto_sugerido:obtenerConceptoValido(documento.concepto,conceptosValidos),
+      area:['COCINA','BARRA','GASTOS'].includes((documento.area||'').toString().toUpperCase())?documento.area.toString().toUpperCase():'',
+      sucursal:obtenerSucursalValida(documento.sucursal),
+      pagado:documento.pagado===true,
+      productos:Array.isArray(documento.productos)?documento.productos:[]
+    }))
   }catch(e){
-
-    console.log(
-      'OpenAI PDF fail:',
-      e.message
-    )
-
+    console.log('OpenAI PDF fail:',e.message)
     return null
   }
 }
 
-/*
-  ============================================================
-  PDF
-  ============================================================
-*/
-
-async function procesarPDF({
-  sock,
-  jid,
-  m
-}){
-
+async function procesarPDF({sock,jid,m}){
   try{
-
     if(!OPENAI_API_KEY){
-
-      await sock.sendMessage(
-        jid,
-        {
-          text:
-            '❌ Falta OPENAI_API_KEY en Railway'
-        }
-      )
-
+      await sock.sendMessage(jid,{text:'❌ Falta OPENAI_API_KEY en Railway'})
       return true
     }
 
-    const buffer=
-      await downloadMediaMessage(
-        m,
-        'buffer',
-        {},
-        {
-          logger:P({level:'fatal'}),
-          reuploadRequest:
-            sock.updateMediaMessage
-        }
-      )
+    const buffer=await downloadMediaMessage(m,'buffer',{},{
+      logger:P({level:'fatal'}),
+      reuploadRequest:sock.updateMediaMessage
+    })
 
     limpiarHashesRecientes()
 
-    const hash=
-      hashBuffer(buffer)
+    const hash=hashBuffer(buffer)
 
-    if(
-      hashesRecientes.has(hash)
-    ){
-
-      console.log(
-        'PDF duplicado ignorado:',
-        jid
-      )
-
-      await sock.sendMessage(
-        jid,
-        {
-          text:
-            '⚠️ Este PDF ya fue recibido recientemente y no se volverá a registrar.'
-        }
-      )
-
+    if(hashesRecientes.has(hash)){
+      console.log('PDF duplicado ignorado:',jid)
+      await sock.sendMessage(jid,{text:'⚠️ Este PDF ya fue recibido recientemente y no se volverá a registrar.'})
       return true
     }
 
-    hashesRecientes.set(
-      hash,
-      Date.now()
-    )
+    hashesRecientes.set(hash,Date.now())
 
     const nombreArchivo=
-      m.message
-        ?.documentMessage
-        ?.fileName||
+      m.message?.documentMessage?.fileName||
+      m.message?.documentWithCaptionMessage?.message?.documentMessage?.fileName||
       'comprobante.pdf'
 
-    const datosIA=
-      await leerPDFConOpenAI(
-        buffer,
-        nombreArchivo
-      )
+    const datosIA=await leerPDFConOpenAI(buffer,nombreArchivo)
 
-    await registrarDocumentosIA(
-      jid,
-      sock,
-      datosIA,
-      'el PDF'
-    )
+    await registrarDocumentosIA(jid,sock,datosIA,'el PDF')
 
     return true
-
   }catch(e){
-
-    console.error(
-      'Error procesando PDF:',
-      e
-    )
-
-    await sock.sendMessage(
-      jid,
-      {
-        text:
-          '❌ Error al procesar el PDF: '+
-          e.message
-      }
-    )
-
+    console.error('Error procesando PDF:',e)
+    await sock.sendMessage(jid,{text:'❌ Error al procesar el PDF: '+e.message})
     return true
   }
 }
 
-/*
-  ============================================================
-  DUPLICADOS
-  ============================================================
-*/
-
-async function buscarDuplicado(
-  datos,
-  proveedorFinal
-){
-
+async function buscarDuplicado(datos,proveedorFinal){
   try{
+    const rows=await getRows(`${SHEET_RESUMEN}!A2:J`,SPREADSHEET_COMPRAS_ID)
+    const folio=normaliza(datos.folio||'').toUpperCase()
+    const fechaDocumento=datos.fechaDocumento||''
+    const fechaCaptura=datos.fechaCaptura||''
+    const monto=parseFloat((datos.monto||'0').toString().replace(/,/g,''))||0
 
-    const rows=
-      await getRows(
-        `${SHEET_RESUMEN}!A2:J`,
-        SPREADSHEET_COMPRAS_ID
+    if(!folio)return false
+
+    return rows.some(r=>{
+      const rProveedor=normaliza(r[4]||'').toUpperCase()
+      const rFolio=normaliza(r[5]||'').toUpperCase()
+      const rFechaDocumento=r[2]||''
+      const rFechaCaptura=r[1]||''
+      const rMonto=parseFloat((r[6]||'0').toString().replace(/,/g,''))||0
+
+      const mismaFecha=
+        fechaDocumento&&rFechaDocumento
+          ?rFechaDocumento===fechaDocumento
+          :rFechaCaptura===fechaCaptura
+
+      return(
+        rProveedor===normaliza(proveedorFinal).toUpperCase()&&
+        rFolio===folio&&
+        mismaFecha&&
+        Math.abs(rMonto-monto)<0.01
       )
-
-    const folio=
-      normaliza(
-        datos.folio||''
-      ).toUpperCase()
-
-    const fechaDocumento=
-      datos.fechaDocumento||''
-
-    const fechaCaptura=
-      datos.fechaCaptura||''
-
-    const monto=
-      parseFloat(
-        (datos.monto||'0')
-          .toString()
-          .replace(/,/g,'')
-      )||0
-
-    if(!folio)
-      return false
-
-    return rows.some(
-      r=>{
-
-        const rProveedor=
-          normaliza(
-            r[4]||''
-          ).toUpperCase()
-
-        const rFolio=
-          normaliza(
-            r[5]||''
-          ).toUpperCase()
-
-        const rFechaDocumento=
-          r[2]||''
-
-        const rFechaCaptura=
-          r[1]||''
-
-        const rMonto=
-          parseFloat(
-            (r[6]||'0')
-              .toString()
-              .replace(/,/g,'')
-          )||0
-
-        const mismaFecha=
-          fechaDocumento&&
-          rFechaDocumento
-            ?rFechaDocumento===
-              fechaDocumento
-            :rFechaCaptura===
-              fechaCaptura
-
-        return(
-          rProveedor===
-            normaliza(
-              proveedorFinal
-            ).toUpperCase()
-
-          &&
-
-          rFolio===folio
-
-          &&
-
-          mismaFecha
-
-          &&
-
-          Math.abs(
-            rMonto-monto
-          )<0.01
-        )
-      }
-    )
-
+    })
   }catch(e){
-
-    console.log(
-      'Error buscando duplicado:',
-      e.message
-    )
-
+    console.log('Error buscando duplicado:',e.message)
     return false
   }
 }
 
-async function marcarFilaDuplicada(
-  rowNumber
-){
-
+async function marcarFilaDuplicada(rowNumber){
   try{
-
-    const sClient=
-      await sheetsClient()
-
+    const sClient=await sheetsClient()
     await sClient.spreadsheets.batchUpdate({
-
-      spreadsheetId:
-        SPREADSHEET_COMPRAS_ID,
-
+      spreadsheetId:SPREADSHEET_COMPRAS_ID,
       requestBody:{
-        requests:[
-
-          {
-            repeatCell:{
-
-              range:{
-
-                sheetId:
-                  await obtenerSheetId(
-                    sClient,
-                    SHEET_RESUMEN
-                  ),
-
-                startRowIndex:
-                  rowNumber-1,
-
-                endRowIndex:
-                  rowNumber,
-
-                startColumnIndex:0,
-
-                endColumnIndex:10
-              },
-
-              cell:{
-
-                userEnteredFormat:{
-
-                  backgroundColor:{
-                    red:1,
-                    green:1,
-                    blue:0.6
-                  }
-                }
-              },
-
-              fields:
-                'userEnteredFormat.backgroundColor'
-            }
+        requests:[{
+          repeatCell:{
+            range:{
+              sheetId:await obtenerSheetId(sClient,SHEET_RESUMEN),
+              startRowIndex:rowNumber-1,
+              endRowIndex:rowNumber,
+              startColumnIndex:0,
+              endColumnIndex:10
+            },
+            cell:{
+              userEnteredFormat:{
+                backgroundColor:{red:1,green:1,blue:0.6}
+              }
+            },
+            fields:'userEnteredFormat.backgroundColor'
           }
-
-        ]
+        }]
       }
     })
-
   }catch(e){
-
-    console.log(
-      'Error marcando duplicado:',
-      e.message
-    )
+    console.log('Error marcando duplicado:',e.message)
   }
 }
 
-async function obtenerSheetId(
-  sClient,
-  nombreHoja
-){
-
-  const meta=
-    await sClient.spreadsheets.get({
-
-      spreadsheetId:
-        SPREADSHEET_COMPRAS_ID,
-
-      fields:
-        'sheets.properties'
-    })
-
-  const hoja=
-    meta.data.sheets?.find(
-      s=>
-        s.properties?.title===
-        nombreHoja
-    )
-
-  return(
-    hoja?.properties?.sheetId??0
-  )
+async function obtenerSheetId(sClient,nombreHoja){
+  const meta=await sClient.spreadsheets.get({
+    spreadsheetId:SPREADSHEET_COMPRAS_ID,
+    fields:'sheets.properties'
+  })
+  const hoja=meta.data.sheets?.find(s=>s.properties?.title===nombreHoja)
+  return hoja?.properties?.sheetId??0
 }
 
-/*
-  ============================================================
-  REGISTRAR COMPRA
-  ============================================================
-*/
-
-async function registrarCompra(
-  datos
-){
-
-  const sClient=
-    await sheetsClient()
-
-  const proveedorFinal=
-    await buscarProveedorCatalogo(
-      datos.proveedor
-    )
-
-  const duplicado=
-    await buscarDuplicado(
-      datos,
-      proveedorFinal
-    )
-
-  const formaPago=
-    datos.pagado
-      ?'PAGADO'
-      :''
-
-  /*
-    RESUMEN COMPRAS
-
-    A Semana
-    B Fecha de Captura
-    C Fecha Documento
-    D Sucursal
-    E Proveedor
-    F # Comprobante
-    G Importe
-    H Concepto
-    I Area
-    J forma de pago
-  */
+async function registrarCompra(datos){
+  const sClient=await sheetsClient()
+  const proveedorFinal=await buscarProveedorCatalogo(datos.proveedor)
+  const duplicado=await buscarDuplicado(datos,proveedorFinal)
+  const formaPago=datos.pagado?'PAGADO':''
 
   await sClient.spreadsheets.values.append({
-
-    spreadsheetId:
-      SPREADSHEET_COMPRAS_ID,
-
-    range:
-      `${SHEET_RESUMEN}!A:J`,
-
-    valueInputOption:
-      'USER_ENTERED',
-
+    spreadsheetId:SPREADSHEET_COMPRAS_ID,
+    range:`${SHEET_RESUMEN}!A:J`,
+    valueInputOption:'USER_ENTERED',
     requestBody:{
       values:[[
-
         datos.semana,
-
         datos.fechaCaptura,
-
         datos.fechaDocumento,
-
         datos.sucursal,
-
         proveedorFinal,
-
         datos.folio,
-
         datos.monto,
-
         datos.concepto,
-
         datos.area,
-
         formaPago
-
       ]]
     }
   })
 
-  /*
-    INSUMOS
-
-    A # Comprobante
-    B Productos
-    C Cantidad
-    D Unidad
-    E Precio Unitario
-    F Costo Final
-    G Proveedor
-    H Sucursal
-    I Fecha
-  */
-
   try{
-
-    if(
-      datos.productos&&
-      datos.productos.length>0
-    ){
-
-      const rows=
-        datos.productos.map(
-          p=>[
-
-            datos.folio,
-
-            p.nombre||
-              datos.concepto,
-
-            p.cantidad||
-              '1',
-
-            p.unidad||
-              '',
-
-            p.precio||
-              '',
-
-            p.total||
-              datos.monto,
-
-            proveedorFinal,
-
-            datos.sucursal,
-
-            datos.fechaCaptura
-
-          ]
-        )
+    if(datos.productos&&datos.productos.length>0){
+      const rows=datos.productos.map(p=>[
+        datos.folio,
+        p.nombre||datos.concepto,
+        p.cantidad||'1',
+        p.unidad||'',
+        p.precio||'',
+        p.total||datos.monto,
+        proveedorFinal,
+        datos.sucursal,
+        datos.fechaCaptura
+      ])
 
       await sClient.spreadsheets.values.append({
-
-        spreadsheetId:
-          SPREADSHEET_COMPRAS_ID,
-
-        range:
-          `${SHEET_INSUMOS}!A:I`,
-
-        valueInputOption:
-          'USER_ENTERED',
-
-        requestBody:{
-          values:rows
-        }
+        spreadsheetId:SPREADSHEET_COMPRAS_ID,
+        range:`${SHEET_INSUMOS}!A:I`,
+        valueInputOption:'USER_ENTERED',
+        requestBody:{values:rows}
       })
-
     }else{
-
       await sClient.spreadsheets.values.append({
-
-        spreadsheetId:
-          SPREADSHEET_COMPRAS_ID,
-
-        range:
-          `${SHEET_INSUMOS}!A:I`,
-
-        valueInputOption:
-          'USER_ENTERED',
-
+        spreadsheetId:SPREADSHEET_COMPRAS_ID,
+        range:`${SHEET_INSUMOS}!A:I`,
+        valueInputOption:'USER_ENTERED',
         requestBody:{
           values:[[
-
             datos.folio,
-
             datos.concepto,
-
             '1',
-
             '',
-
             datos.monto,
-
             datos.monto,
-
             proveedorFinal,
-
             datos.sucursal,
-
             datos.fechaCaptura
-
           ]]
         }
       })
     }
-
   }catch(e){
-
-    console.log(
-      'Error INSUMOS:',
-      e.message
-    )
+    console.log('Error INSUMOS:',e.message)
   }
 
-  /*
-    DUPLICADO:
-    Primero registra.
-    Después marca la NUEVA fila.
-  */
-
   if(duplicado){
-
     try{
-
-      const rowsActuales=
-        await getRows(
-          `${SHEET_RESUMEN}!A2:J`,
-          SPREADSHEET_COMPRAS_ID
-        )
-
-      await marcarFilaDuplicada(
-        rowsActuales.length+1
-      )
-
+      const rowsActuales=await getRows(`${SHEET_RESUMEN}!A2:J`,SPREADSHEET_COMPRAS_ID)
+      await marcarFilaDuplicada(rowsActuales.length+1)
     }catch(e){
-
-      console.log(
-        'Error marcando fila duplicada:',
-        e.message
-      )
+      console.log('Error marcando fila duplicada:',e.message)
     }
   }
 
   return{
-
     ok:true,
-
     duplicado,
-
-    proveedor:
-      proveedorFinal,
-
+    proveedor:proveedorFinal,
     msg:
       `✅ Compra registrada · `+
       `Captura ${datos.fechaCaptura} · `+
@@ -1724,69 +750,23 @@ async function registrarCompra(
       `${proveedorFinal} · `+
       `${datos.folio||'SIN FOLIO'} · `+
       `$${datos.monto}`+
-      `${
-        datos.sucursal
-          ?` · ${datos.sucursal}`
-          :''
-      }`
+      `${datos.sucursal?` · ${datos.sucursal}`:''}`
   }
 }
 
-/*
-  ============================================================
-  EXCEL
-  ============================================================
-*/
+export async function generarExcelCompras(filtro,jid,sock){
+  const rows=await getRows(`${SHEET_RESUMEN}!A2:J`,SPREADSHEET_COMPRAS_ID)
 
-export async function generarExcelCompras(
-  filtro,
-  jid,
-  sock
-){
+  let filtradas=rows.filter(r=>{
+    if(filtro.sucursal&&!(r[3]||'').toUpperCase().includes(filtro.sucursal.toUpperCase()))return false
+    if(filtro.fecha&&r[1]!==filtro.fecha)return false
+    return true
+  })
 
-  const rows=
-    await getRows(
-      `${SHEET_RESUMEN}!A2:J`,
-      SPREADSHEET_COMPRAS_ID
-    )
-
-  let filtradas=
-    rows.filter(
-      r=>{
-
-        if(
-          filtro.sucursal&&
-          !(r[3]||'')
-            .toUpperCase()
-            .includes(
-              filtro.sucursal
-                .toUpperCase()
-            )
-        ){
-          return false
-        }
-
-        if(
-          filtro.fecha&&
-          r[1]!==filtro.fecha
-        ){
-          return false
-        }
-
-        return true
-      }
-    )
-
-  const wb=
-    new ExcelJS.Workbook()
-
-  const ws=
-    wb.addWorksheet(
-      'Compras'
-    )
+  const wb=new ExcelJS.Workbook()
+  const ws=wb.addWorksheet('Compras')
 
   ws.addRow([
-
     'Semana',
     'Fecha de Captura',
     'Fecha Documento',
@@ -1797,269 +777,87 @@ export async function generarExcelCompras(
     'Concepto',
     'Area',
     'FormaPago'
+  ]).font={bold:true}
 
-  ]).font={
-    bold:true
-  }
+  filtradas.forEach(r=>ws.addRow(r))
 
-  filtradas.forEach(
-    r=>ws.addRow(r)
+  const total=filtradas.reduce(
+    (a,r)=>a+(parseFloat((r[6]||'0').toString().replace(/,/g,''))||0),
+    0
   )
-
-  const total=
-    filtradas.reduce(
-
-      (a,r)=>
-        a+
-        (
-          parseFloat(
-            (r[6]||'0')
-              .toString()
-              .replace(/,/g,'')
-          )||0
-        ),
-
-      0
-    )
 
   ws.addRow([])
+  ws.addRow(['TOTAL','','','','','',total])
 
-  ws.addRow([
-    'TOTAL',
-    '',
-    '',
-    '',
-    '',
-    '',
-    total
-  ])
+  ws.columns.forEach(c=>{c.width=18})
 
-  ws.columns.forEach(
-    c=>{
-      c.width=18
-    }
-  )
+  const fileName=`Compras_${filtro.sucursal||'TODAS'}_${fechaLaboral()}.xlsx`
+  const fp=path.join(os.tmpdir(),fileName)
 
-  const fileName=
-    `Compras_`+
-    `${filtro.sucursal||'TODAS'}_`+
-    `${fechaLaboral()}.xlsx`
+  await wb.xlsx.writeFile(fp)
 
-  const fp=
-    path.join(
-      os.tmpdir(),
-      fileName
-    )
+  await sock.sendMessage(jid,{
+    document:fs.readFileSync(fp),
+    mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    fileName,
+    caption:`📊 Compras ${filtro.sucursal||''} - ${filtradas.length} regs - Total $${total}`
+  })
 
-  await wb.xlsx.writeFile(
-    fp
-  )
-
-  await sock.sendMessage(
-    jid,
-    {
-
-      document:
-        fs.readFileSync(fp),
-
-      mimetype:
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-
-      fileName,
-
-      caption:
-        `📊 Compras `+
-        `${filtro.sucursal||''} - `+
-        `${filtradas.length} regs - `+
-        `Total $${total}`
-    }
-  )
-
-  fs.unlinkSync(
-    fp
-  )
+  fs.unlinkSync(fp)
 }
 
-function parseFiltroCompras(
-  texto
-){
-
-  const low=
-    normaliza(texto)
-
+function parseFiltroCompras(texto){
+  const low=normaliza(texto)
   let suc=null
 
-  if(
-    low.includes('bucareli')
-  ){
-
-    suc='BUCARELI'
-
-  }else if(
-    low.includes('coyo')
-  ){
-
-    suc='COYOACAN'
-
-  }else if(
-    low.includes('juarez')
-  ){
-
-    suc='JUAREZ'
-  }
+  if(low.includes('bucareli'))suc='BUCARELI'
+  else if(low.includes('coyo'))suc='COYOACAN'
+  else if(low.includes('juarez'))suc='JUAREZ'
 
   let fecha=null
+  if(low.includes('hoy'))fecha=fechaLaboral()
 
-  if(
-    low.includes('hoy')
-  ){
-
-    fecha=
-      fechaLaboral()
-  }
-
-  return{
-    sucursal:suc,
-    fecha
-  }
+  return{sucursal:suc,fecha}
 }
 
-/*
-  ============================================================
-  HANDLE COMPRAS
-  ============================================================
-*/
-
 export async function handleCompras({
-
   sock,
   jid,
   m,
   texto,
   esImagen,
   esPDF
-
 }){
-
-  /*
-    REPORTES DE COMPRAS
-  */
-
-  if(
-    /^compras/i.test(texto)
-  ){
-
-    const f=
-      parseFiltroCompras(
-        texto
-      )
-
-    await generarExcelCompras(
-      f,
-      jid,
-      sock
-    )
-
+  if(/^compras/i.test(texto)){
+    const f=parseFiltroCompras(texto)
+    await generarExcelCompras(f,jid,sock)
     return true
   }
 
-  /*
-    RESTRICCION ACTUAL:
-    SOLO GRUPO DE PRUEBAS
-  */
-
-  if(
-    (
-      esImagen||
-      esPDF
-    )&&
-    jid!==GRUPO_PRUEBAS_ID
-  ){
-
-    return false
-  }
-
-  /*
-    PDF
-  */
+  if((esImagen||esPDF)&&jid!==GRUPO_PRUEBAS_ID)return false
 
   if(esPDF){
-
     try{
-
-      return await procesarPDF({
-        sock,
-        jid,
-        m
-      })
-
+      return await procesarPDF({sock,jid,m})
     }catch(e){
-
-      console.error(
-        'Error en PDF Compras:',
-        e
-      )
-
-      await sock.sendMessage(
-        jid,
-        {
-          text:
-            '❌ Error al recibir PDF: '+
-            e.message
-        }
-      )
-
+      console.error('Error en PDF Compras:',e)
+      await sock.sendMessage(jid,{text:'❌ Error al recibir PDF: '+e.message})
       return true
     }
   }
 
-  /*
-    FOTOS
-  */
-
   if(esImagen){
-
     try{
-
       if(!OPENAI_API_KEY){
-
-        await sock.sendMessage(
-          jid,
-          {
-            text:
-              '❌ Falta OPENAI_API_KEY en Railway'
-          }
-        )
-
+        await sock.sendMessage(jid,{text:'❌ Falta OPENAI_API_KEY en Railway'})
         return true
       }
 
-      await agregarFotoACola({
-
-        sock,
-        jid,
-        m,
-        texto
-
-      })
-
+      await agregarFotoACola({sock,jid,m,texto})
       return true
-
     }catch(e){
-
-      console.error(
-        e
-      )
-
-      await sock.sendMessage(
-        jid,
-        {
-          text:
-            '❌ Error al recibir compra: '+
-            e.message
-        }
-      )
-
+      console.error(e)
+      await sock.sendMessage(jid,{text:'❌ Error al recibir compra: '+e.message})
       return true
     }
   }
