@@ -1,6 +1,11 @@
 import { downloadMediaMessage } from '@whiskeysockets/baileys'
 import P from 'pino'
-import { SPREADSHEET_COMPRAS_ID, SHEET_RESUMEN, SHEET_INSUMOS, GRUPO_PRUEBAS_ID } from '../config.js'
+import {
+  SPREADSHEET_COMPRAS_ID,
+  SHEET_RESUMEN,
+  SHEET_INSUMOS,
+  GRUPO_PRUEBAS_ID
+} from '../config.js'
 import { fechaLaboral, normaliza } from '../utils.js'
 import { sheetsClient, getRows } from '../sheets.js'
 import ExcelJS from 'exceljs'
@@ -10,59 +15,104 @@ import os from 'os'
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY
 
-const CONCEPTOS_VALIDOS = [
-  'ABARROTES',
-  'BAÑOS',
-  'BASURA',
-  'BEBIDA SIN ALCOHOL',
-  'CARNE DE CERDO',
-  'CARNE DE RES',
-  'CERVEZAS Y AGUAMIEL',
-  'CHAPULINES',
-  'CHICHARRON DURO',
-  'COCAS',
-  'COMIDA PERSONAL',
-  'DESECHABLES',
-  'DESTILADOS',
-  'ESTACIONAMIENTO',
-  'FLORES',
-  'FRUTAS Y VERDURAS',
-  'FUMIGACION',
-  'GARRAFONES',
-  'GAS LP',
-  'GASTO',
-  'HIELO',
-  'INSECTOS',
-  'JUGOS',
-  'LACTEOS',
-  'LIMPIEZA',
-  'MASA Y TORTILLA',
-  'MEDICAMENTOS',
-  'PAPELERIA Y COPIAS',
-  'PESCADOS Y MARISCOS',
-  'POLLO Y PATO',
-  'PRENSADO',
-  'RENTA',
-  'REPARACIONES',
-  'UNIFORMES',
-  'VIATICOS',
-  'VIGILACIA'
-]
+/*
+  ============================================================
+  CATALOGO DE CONCEPTOS
+  ============================================================
 
-function obtenerConceptoValido(valor){
-  const x = normaliza(valor || '').toUpperCase().trim()
+  Los conceptos YA NO se mantienen aquí manualmente.
+
+  Se leen directamente de:
+
+  lista Proveedores!J2:J
+
+  Así puedes agregar o quitar conceptos desde Google Sheets
+  sin modificar este archivo.
+*/
+
+async function obtenerConceptosCatalogo(){
+
+  try{
+
+    const rows = await getRows(
+      'lista Proveedores!J2:J',
+      SPREADSHEET_COMPRAS_ID
+    )
+
+    const conceptos = []
+
+    for(const row of rows){
+
+      const concepto = (row[0] || '')
+        .toString()
+        .trim()
+
+      if(!concepto) continue
+
+      conceptos.push(concepto)
+    }
+
+    return conceptos
+
+  }catch(e){
+
+    console.log(
+      'Error leyendo conceptos de lista Proveedores:',
+      e.message
+    )
+
+    return []
+  }
+}
+
+function obtenerConceptoValido(valor, conceptosValidos){
+
+  const x =
+    normaliza(valor || '')
+      .toUpperCase()
+      .trim()
 
   if(!x) return ''
 
-  const encontrado = CONCEPTOS_VALIDOS.find(c =>
+  const encontrado = conceptosValidos.find(c =>
     normaliza(c).toUpperCase() === x
   )
 
   return encontrado || ''
 }
 
+function obtenerSucursalValida(valor){
+
+  const x =
+    normaliza(valor || '')
+      .toUpperCase()
+      .trim()
+
+  if(!x) return ''
+
+  if(
+    x === 'BUCARELI' ||
+    x.includes('BUCARELI')
+  ){
+    return 'BUCARELI'
+  }
+
+  if(
+    x === 'COYOACAN' ||
+    x.includes('COYOACAN') ||
+    x.includes('COYOACÁN')
+  ){
+    return 'COYOACAN'
+  }
+
+  return ''
+}
+
 function obtenerSemanaCompras(fecha){
-  const d = new Date(`${fecha}T12:00:00`)
+
+  const d =
+    new Date(`${fecha}T12:00:00`)
+
   if(Number.isNaN(d.getTime())) return ''
 
   /*
@@ -78,41 +128,69 @@ function obtenerSemanaCompras(fecha){
 
   const anio = d.getFullYear()
 
-  const inicioAnio = new Date(anio, 0, 1, 12)
+  const inicioAnio =
+    new Date(anio, 0, 1, 12)
 
-  const diaSemana = inicioAnio.getDay()
+  const diaSemana =
+    inicioAnio.getDay()
 
-  const diasDesdeMartes = (diaSemana - 2 + 7) % 7
+  const diasDesdeMartes =
+    (diaSemana - 2 + 7) % 7
 
-  const inicioSemana01 = new Date(inicioAnio)
-  inicioSemana01.setDate(inicioSemana01.getDate() - diasDesdeMartes)
+  const inicioSemana01 =
+    new Date(inicioAnio)
 
-  const diferenciaDias = Math.floor(
-    (d - inicioSemana01) / 86400000
+  inicioSemana01.setDate(
+    inicioSemana01.getDate() -
+    diasDesdeMartes
   )
 
-  const numeroSemana = Math.floor(diferenciaDias / 7) + 1
+  const diferenciaDias =
+    Math.floor(
+      (d - inicioSemana01) /
+      86400000
+    )
 
-  return `${String(numeroSemana).padStart(2,'0')}-${String(anio).slice(-2)}`
+  const numeroSemana =
+    Math.floor(
+      diferenciaDias / 7
+    ) + 1
+
+  return (
+    `${String(numeroSemana).padStart(2,'0')}-` +
+    `${String(anio).slice(-2)}`
+  )
 }
 
 async function buscarProveedorCatalogo(nombre){
+
   try{
+
     const rows = await getRows(
       'lista Proveedores!A2:A',
       SPREADSHEET_COMPRAS_ID
     )
 
-    const buscado = normaliza(nombre || '').toUpperCase().trim()
+    const buscado =
+      normaliza(nombre || '')
+        .toUpperCase()
+        .trim()
 
-    if(!buscado) return 'PROVEEDOR OCASIONAL'
+    if(!buscado)
+      return 'PROVEEDOR OCASIONAL'
 
     for(const row of rows){
-      const oficial = (row[0] || '').toString().trim()
+
+      const oficial =
+        (row[0] || '')
+          .toString()
+          .trim()
 
       if(!oficial) continue
 
-      const normalizado = normaliza(oficial).toUpperCase()
+      const normalizado =
+        normaliza(oficial)
+          .toUpperCase()
 
       if(
         normalizado === buscado ||
@@ -126,30 +204,64 @@ async function buscarProveedorCatalogo(nombre){
     return 'PROVEEDOR OCASIONAL'
 
   }catch(e){
-    console.log('Error lista Proveedores:', e.message)
+
+    console.log(
+      'Error lista Proveedores:',
+      e.message
+    )
+
     return 'PROVEEDOR OCASIONAL'
   }
 }
 
 async function leerTicketConOpenAI(bufferImagen){
-  try{
-    const base64 = bufferImagen.toString('base64')
 
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
-      method:'POST',
-      headers:{
-        'Authorization':`Bearer ${OPENAI_API_KEY}`,
-        'Content-Type':'application/json'
-      },
-      body:JSON.stringify({
-        model:'gpt-4o',
-        messages:[
-          {
-            role:'user',
-            content:[
+  try{
+
+    const conceptosValidos =
+      await obtenerConceptosCatalogo()
+
+    /*
+      Si no hay conceptos configurados en J,
+      no inventamos ninguno.
+    */
+
+    const listaConceptos =
+      conceptosValidos.length > 0
+        ? conceptosValidos.join(', ')
+        : '(NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J)'
+
+    const base64 =
+      bufferImagen.toString('base64')
+
+    const res =
+      await fetch(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          method:'POST',
+
+          headers:{
+            'Authorization':
+              `Bearer ${OPENAI_API_KEY}`,
+            'Content-Type':
+              'application/json'
+          },
+
+          body:JSON.stringify({
+
+            model:'gpt-4o',
+
+            messages:[
+
               {
-                type:'text',
-                text:`Eres lector de tickets de compras para restaurante Trinidad.
+                role:'user',
+
+                content:[
+
+                  {
+                    type:'text',
+
+                    text:`Eres lector de tickets de compras para restaurante Trinidad.
 
 Analiza esta imagen. Puede ser FACTURA impresa, TICKET o NOTA MANUSCRITA.
 
@@ -162,6 +274,7 @@ Devuelve SOLO JSON válido con esta estructura:
   "fecha_ticket": "YYYY-MM-DD",
   "concepto": "",
   "area": "",
+  "sucursal": "",
   "pagado": false,
   "productos": [
     {
@@ -174,221 +287,482 @@ Devuelve SOLO JSON válido con esta estructura:
   ]
 }
 
-CONCEPTOS PERMITIDOS:
-${CONCEPTOS_VALIDOS.join(', ')}
+CONCEPTOS DISPONIBLES EN GOOGLE SHEETS:
+${listaConceptos}
 
 REGLAS:
 
 - proveedor: escribe exactamente lo que aparezca en el comprobante.
 - No inventes proveedores.
+
 - folio: usa el número real del comprobante si existe.
 - Si no existe folio, devuelve "".
-- importe_total: busca TOTAL y devuelve solo número.
-- fecha_ticket: usa la fecha visible. Si no es legible devuelve "".
-- concepto: selecciona SOLO uno de los conceptos permitidos.
-- Si no hay coincidencia clara, devuelve "".
-- area: solo puede ser COCINA, BARRA o GASTOS.
-- Si no hay evidencia clara del área, devuelve "".
-- pagado: true únicamente si se observa claramente PAGADO, sello de pagado o evidencia equivalente.
-- No marques pagado por suposición.
-- productos: extrae los productos visibles.
-- cantidad y precio deben ser números cuando sea posible.
-- unidad puede ser KG, PIEZA, CAJA, LITRO, etc.
-- No inventes productos que no aparezcan.
-- Si algo no es legible, deja el campo vacío.`
-              },
-              {
-                type:'image_url',
-                image_url:{
-                  url:`data:image/jpeg;base64,${base64}`
-                }
-              }
-            ]
-          }
-        ],
-        max_tokens:1500,
-        temperature:0.1
-      })
-    })
 
-    const data = await res.json()
+- importe_total: busca TOTAL y devuelve solo número.
+
+- fecha_ticket: usa la fecha visible.
+- Si no es legible devuelve "".
+
+- concepto:
+  selecciona SOLO uno de los conceptos disponibles
+  en la lista anterior.
+
+- NO inventes conceptos.
+
+- Si el comprobante no permite identificar claramente
+  uno de los conceptos disponibles, devuelve "".
+
+- area:
+  solo puede ser COCINA, BARRA o GASTOS.
+  Si no hay evidencia clara del área, devuelve "".
+
+- sucursal:
+  determina la sucursal UNICAMENTE mediante un
+  SELLO DE SUCURSAL visible en la imagen.
+
+- Si existe un sello claramente identificable como
+  BUCARELI, devuelve "BUCARELI".
+
+- Si existe un sello claramente identificable como
+  COYOACAN o COYOACÁN, devuelve "COYOACAN".
+
+- Si NO existe un sello de sucursal claramente visible,
+  devuelve "".
+
+- NO deduzcas la sucursal por el proveedor.
+
+- NO deduzcas la sucursal por la dirección.
+
+- NO deduzcas la sucursal por RFC.
+
+- NO deduzcas la sucursal por teléfono.
+
+- NO deduzcas la sucursal por encabezado.
+
+- NO deduzcas la sucursal por domicilio.
+
+- NO deduzcas la sucursal por texto de la factura.
+
+- NO deduzcas la sucursal por el grupo de WhatsApp.
+
+- La ausencia de sello significa sucursal "".
+
+- pagado:
+  true únicamente si se observa claramente PAGADO,
+  sello de pagado o evidencia equivalente.
+
+- No marques pagado por suposición.
+
+- El sello de PAGADO y el sello de SUCURSAL
+  son datos independientes.
+
+- Un sello de sucursal NO significa que esté pagado.
+
+- No marques PAGADO solamente porque exista
+  un sello de sucursal.
+
+- productos:
+  extrae los productos visibles.
+
+- cantidad y precio deben ser números cuando
+  sea posible.
+
+- unidad puede ser KG, PIEZA, CAJA, LITRO, etc.
+
+- No inventes productos que no aparezcan.
+
+- Si algo no es legible, deja el campo vacío.`
+                  },
+
+                  {
+                    type:'image_url',
+
+                    image_url:{
+                      url:
+                        `data:image/jpeg;base64,${base64}`
+                    }
+                  }
+
+                ]
+              }
+
+            ],
+
+            max_tokens:1500,
+            temperature:0.1
+          })
+        }
+      )
+
+    const data =
+      await res.json()
 
     const content =
-      data.choices?.[0]?.message?.content || ''
+      data.choices?.[0]?.message?.content ||
+      ''
 
-    console.log('OpenAI RAW:', content)
+    console.log(
+      'OpenAI RAW:',
+      content
+    )
 
-    const match = content.match(/\{[\s\S]*\}/)
+    const match =
+      content.match(/\{[\s\S]*\}/)
 
-    if(!match) return null
+    if(!match)
+      return null
 
-    const json = JSON.parse(match[0])
+    const json =
+      JSON.parse(match[0])
 
     return {
-      proveedor:json.proveedor || '',
-      folio:json.folio || '',
-      importe_total:(json.importe_total || '0')
-        .toString()
-        .replace(/,/g,''),
-      fecha_ticket:json.fecha_ticket || fechaLaboral(),
-      concepto_sugerido:obtenerConceptoValido(json.concepto),
-      area:['COCINA','BARRA','GASTOS'].includes(
-        (json.area || '').toString().toUpperCase()
-      )
-        ? json.area.toString().toUpperCase()
-        : '',
-      pagado:json.pagado === true,
-      productos:Array.isArray(json.productos)
-        ? json.productos
-        : []
+
+      proveedor:
+        json.proveedor || '',
+
+      folio:
+        json.folio || '',
+
+      importe_total:
+        (json.importe_total || '0')
+          .toString()
+          .replace(/,/g,''),
+
+      fecha_ticket:
+        json.fecha_ticket ||
+        fechaLaboral(),
+
+      concepto_sugerido:
+        obtenerConceptoValido(
+          json.concepto,
+          conceptosValidos
+        ),
+
+      area:
+        ['COCINA','BARRA','GASTOS'].includes(
+          (json.area || '')
+            .toString()
+            .toUpperCase()
+        )
+          ? json.area
+              .toString()
+              .toUpperCase()
+          : '',
+
+      sucursal:
+        obtenerSucursalValida(
+          json.sucursal
+        ),
+
+      pagado:
+        json.pagado === true,
+
+      productos:
+        Array.isArray(json.productos)
+          ? json.productos
+          : []
     }
 
   }catch(e){
-    console.log('OpenAI fail', e.message)
+
+    console.log(
+      'OpenAI fail',
+      e.message
+    )
+
     return null
   }
 }
 
-async function buscarDuplicado(datos, proveedorFinal){
+async function buscarDuplicado(
+  datos,
+  proveedorFinal
+){
+
   try{
-    const rows = await getRows(
-      `${SHEET_RESUMEN}!A2:I`,
-      SPREADSHEET_COMPRAS_ID
-    )
 
-    const folio = normaliza(datos.folio || '').toUpperCase()
-    const fecha = datos.fecha
-    const monto = parseFloat(
-      (datos.monto || '0').toString().replace(/,/g,'')
-    ) || 0
+    const rows =
+      await getRows(
+        `${SHEET_RESUMEN}!A2:I`,
+        SPREADSHEET_COMPRAS_ID
+      )
 
-    if(!folio) return false
+    const folio =
+      normaliza(
+        datos.folio || ''
+      ).toUpperCase()
 
-    return rows.some(r=>{
-      const rProveedor = normaliza(r[3] || '').toUpperCase()
-      const rFolio = normaliza(r[4] || '').toUpperCase()
-      const rFecha = r[1] || ''
-      const rMonto = parseFloat(
-        (r[5] || '0').toString().replace(/,/g,'')
+    const fecha =
+      datos.fecha
+
+    const monto =
+      parseFloat(
+        (datos.monto || '0')
+          .toString()
+          .replace(/,/g,'')
       ) || 0
 
+    if(!folio)
+      return false
+
+    return rows.some(r=>{
+
+      const rProveedor =
+        normaliza(
+          r[3] || ''
+        ).toUpperCase()
+
+      const rFolio =
+        normaliza(
+          r[4] || ''
+        ).toUpperCase()
+
+      const rFecha =
+        r[1] || ''
+
+      const rMonto =
+        parseFloat(
+          (r[5] || '0')
+            .toString()
+            .replace(/,/g,'')
+        ) || 0
+
       return (
-        rProveedor === normaliza(proveedorFinal).toUpperCase() &&
-        rFolio === folio &&
-        rFecha === fecha &&
-        Math.abs(rMonto - monto) < 0.01
+
+        rProveedor ===
+          normaliza(
+            proveedorFinal
+          ).toUpperCase()
+
+        &&
+
+        rFolio === folio
+
+        &&
+
+        rFecha === fecha
+
+        &&
+
+        Math.abs(
+          rMonto - monto
+        ) < 0.01
+
       )
     })
 
   }catch(e){
-    console.log('Error buscando duplicado:', e.message)
+
+    console.log(
+      'Error buscando duplicado:',
+      e.message
+    )
+
     return false
   }
 }
 
-async function marcarFilaDuplicada(rowNumber){
+async function marcarFilaDuplicada(
+  rowNumber
+){
+
   try{
-    const sClient = await sheetsClient()
+
+    const sClient =
+      await sheetsClient()
 
     await sClient.spreadsheets.batchUpdate({
-      spreadsheetId:SPREADSHEET_COMPRAS_ID,
+
+      spreadsheetId:
+        SPREADSHEET_COMPRAS_ID,
+
       requestBody:{
         requests:[
+
           {
             repeatCell:{
+
               range:{
-                sheetId:await obtenerSheetId(
-                  sClient,
-                  SHEET_RESUMEN
-                ),
-                startRowIndex:rowNumber - 1,
-                endRowIndex:rowNumber,
-                startColumnIndex:0,
-                endColumnIndex:9
+
+                sheetId:
+                  await obtenerSheetId(
+                    sClient,
+                    SHEET_RESUMEN
+                  ),
+
+                startRowIndex:
+                  rowNumber - 1,
+
+                endRowIndex:
+                  rowNumber,
+
+                startColumnIndex:
+                  0,
+
+                endColumnIndex:
+                  9
               },
+
               cell:{
+
                 userEnteredFormat:{
+
                   backgroundColor:{
+
                     red:1,
                     green:1,
                     blue:0.6
                   }
                 }
               },
-              fields:'userEnteredFormat.backgroundColor'
+
+              fields:
+                'userEnteredFormat.backgroundColor'
             }
           }
+
         ]
       }
     })
 
   }catch(e){
-    console.log('Error marcando duplicado:', e.message)
+
+    console.log(
+      'Error marcando duplicado:',
+      e.message
+    )
   }
 }
 
-async function obtenerSheetId(sClient, nombreHoja){
-  const meta = await sClient.spreadsheets.get({
-    spreadsheetId:SPREADSHEET_COMPRAS_ID,
-    fields:'sheets.properties'
-  })
+async function obtenerSheetId(
+  sClient,
+  nombreHoja
+){
 
-  const hoja = meta.data.sheets?.find(
-    s => s.properties?.title === nombreHoja
+  const meta =
+    await sClient.spreadsheets.get({
+
+      spreadsheetId:
+        SPREADSHEET_COMPRAS_ID,
+
+      fields:
+        'sheets.properties'
+    })
+
+  const hoja =
+    meta.data.sheets?.find(
+      s =>
+        s.properties?.title ===
+        nombreHoja
+    )
+
+  return (
+    hoja?.properties?.sheetId ??
+    0
   )
-
-  return hoja?.properties?.sheetId ?? 0
 }
 
 async function registrarCompra(datos){
-  const sClient = await sheetsClient()
+
+  const sClient =
+    await sheetsClient()
 
   const proveedorFinal =
-    await buscarProveedorCatalogo(datos.proveedor)
+    await buscarProveedorCatalogo(
+      datos.proveedor
+    )
 
   const duplicado =
-    await buscarDuplicado(datos, proveedorFinal)
+    await buscarDuplicado(
+      datos,
+      proveedorFinal
+    )
 
   const formaPago =
-    datos.pagado ? 'PAGADO' : ''
+    datos.pagado
+      ? 'PAGADO'
+      : ''
 
   await sClient.spreadsheets.values.append({
-    spreadsheetId:SPREADSHEET_COMPRAS_ID,
-    range:`${SHEET_RESUMEN}!A:I`,
-    valueInputOption:'USER_ENTERED',
+
+    spreadsheetId:
+      SPREADSHEET_COMPRAS_ID,
+
+    range:
+      `${SHEET_RESUMEN}!A:I`,
+
+    valueInputOption:
+      'USER_ENTERED',
+
     requestBody:{
       values:[[
+
         datos.semana,
+
         datos.fecha,
+
         datos.sucursal,
+
         proveedorFinal,
+
         datos.folio,
+
         datos.monto,
+
         datos.concepto,
+
         datos.area,
+
         formaPago
+
       ]]
     }
   })
 
   try{
-    if(datos.productos && datos.productos.length > 0){
 
-      const rows = datos.productos.map(p=>[
-        datos.folio,
-        p.nombre || datos.concepto,
-        p.cantidad || '1',
-        p.unidad || '',
-        p.precio || '',
-        p.total || datos.monto,
-        datos.sucursal,
-        datos.fecha
-      ])
+    if(
+      datos.productos &&
+      datos.productos.length > 0
+    ){
+
+      const rows =
+        datos.productos.map(p=>[
+
+          datos.folio,
+
+          p.nombre ||
+            datos.concepto,
+
+          p.cantidad ||
+            '1',
+
+          p.unidad ||
+            '',
+
+          p.precio ||
+            '',
+
+          p.total ||
+            datos.monto,
+
+          datos.sucursal,
+
+          datos.fecha
+
+        ])
 
       await sClient.spreadsheets.values.append({
-        spreadsheetId:SPREADSHEET_COMPRAS_ID,
-        range:`${SHEET_INSUMOS}!A:H`,
-        valueInputOption:'USER_ENTERED',
+
+        spreadsheetId:
+          SPREADSHEET_COMPRAS_ID,
+
+        range:
+          `${SHEET_INSUMOS}!A:H`,
+
+        valueInputOption:
+          'USER_ENTERED',
+
         requestBody:{
           values:rows
         }
@@ -397,26 +771,46 @@ async function registrarCompra(datos){
     }else{
 
       await sClient.spreadsheets.values.append({
-        spreadsheetId:SPREADSHEET_COMPRAS_ID,
-        range:`${SHEET_INSUMOS}!A:H`,
-        valueInputOption:'USER_ENTERED',
+
+        spreadsheetId:
+          SPREADSHEET_COMPRAS_ID,
+
+        range:
+          `${SHEET_INSUMOS}!A:H`,
+
+        valueInputOption:
+          'USER_ENTERED',
+
         requestBody:{
           values:[[
+
             datos.folio,
+
             datos.concepto,
+
             '1',
+
             '',
+
             datos.monto,
+
             datos.monto,
+
             datos.sucursal,
+
             datos.fecha
+
           ]]
         }
       })
     }
 
   }catch(e){
-    console.log('Error INSUMOS:', e.message)
+
+    console.log(
+      'Error INSUMOS:',
+      e.message
+    )
   }
 
   /*
@@ -425,54 +819,97 @@ async function registrarCompra(datos){
   */
 
   if(duplicado){
+
     try{
-      const rowsActuales = await getRows(
-        `${SHEET_RESUMEN}!A2:I`,
-        SPREADSHEET_COMPRAS_ID
+
+      const rowsActuales =
+        await getRows(
+          `${SHEET_RESUMEN}!A2:I`,
+          SPREADSHEET_COMPRAS_ID
+        )
+
+      await marcarFilaDuplicada(
+        rowsActuales.length + 1
       )
 
-      await marcarFilaDuplicada(rowsActuales.length + 1)
-
     }catch(e){
-      console.log('Error marcando fila duplicada:', e.message)
+
+      console.log(
+        'Error marcando fila duplicada:',
+        e.message
+      )
     }
   }
 
   return {
+
     ok:true,
+
     duplicado,
-    proveedor:proveedorFinal,
+
+    proveedor:
+      proveedorFinal,
+
     msg:
-      `✅ Compra registrada · ${datos.fecha} · `+
-      `${proveedorFinal} · ${datos.folio || 'SIN FOLIO'} · `+
-      `$${datos.monto} · ${datos.sucursal}`
+      `✅ Compra registrada · ` +
+      `${datos.fecha} · ` +
+      `${proveedorFinal} · ` +
+      `${datos.folio || 'SIN FOLIO'} · ` +
+      `$${datos.monto} · ` +
+      `${datos.sucursal}`
+
   }
 }
 
-export async function generarExcelCompras(filtro, jid, sock){
-  const rows = await getRows(
-    `${SHEET_RESUMEN}!A2:I`,
-    SPREADSHEET_COMPRAS_ID
-  )
+export async function generarExcelCompras(
+  filtro,
+  jid,
+  sock
+){
 
-  let filtradas = rows.filter(r=>{
+  const rows =
+    await getRows(
+      `${SHEET_RESUMEN}!A2:I`,
+      SPREADSHEET_COMPRAS_ID
+    )
 
-    if(
-      filtro.sucursal &&
-      !(r[2] || '')
-        .toUpperCase()
-        .includes(filtro.sucursal.toUpperCase())
-    ) return false
+  let filtradas =
+    rows.filter(r=>{
 
-    if(filtro.fecha && r[1] !== filtro.fecha) return false
+      if(
+        filtro.sucursal &&
 
-    return true
-  })
+        !(r[2] || '')
+          .toUpperCase()
+          .includes(
+            filtro.sucursal
+              .toUpperCase()
+          )
 
-  const wb = new ExcelJS.Workbook()
-  const ws = wb.addWorksheet('Compras')
+      ){
+        return false
+      }
+
+      if(
+        filtro.fecha &&
+        r[1] !== filtro.fecha
+      ){
+        return false
+      }
+
+      return true
+    })
+
+  const wb =
+    new ExcelJS.Workbook()
+
+  const ws =
+    wb.addWorksheet(
+      'Compras'
+    )
 
   ws.addRow([
+
     'Semana',
     'Fecha',
     'Sucursal',
@@ -482,79 +919,144 @@ export async function generarExcelCompras(filtro, jid, sock){
     'Concepto',
     'Area',
     'FormaPago'
-  ]).font={bold:true}
 
-  filtradas.forEach(r=>ws.addRow(r))
+  ]).font={
+    bold:true
+  }
 
-  const total = filtradas.reduce(
-    (a,r)=>
-      a +
-      (
-        parseFloat(
-          (r[5] || '0')
-            .toString()
-            .replace(/,/g,'')
-        ) || 0
-      ),
-    0
+  filtradas.forEach(
+    r =>
+      ws.addRow(r)
   )
 
-  ws.addRow([])
-  ws.addRow(['TOTAL','','','','',total])
+  const total =
+    filtradas.reduce(
 
-  ws.columns.forEach(c=>c.width=18)
+      (a,r)=>
+        a +
+        (
+          parseFloat(
+            (r[5] || '0')
+              .toString()
+              .replace(/,/g,'')
+          ) || 0
+        ),
+
+      0
+    )
+
+  ws.addRow([])
+
+  ws.addRow([
+    'TOTAL',
+    '',
+    '',
+    '',
+    '',
+    total
+  ])
+
+  ws.columns.forEach(
+    c =>
+      c.width = 18
+  )
 
   const fileName =
-    `Compras_${filtro.sucursal || 'TODAS'}_${fechaLaboral()}.xlsx`
+    `Compras_` +
+    `${filtro.sucursal || 'TODAS'}_` +
+    `${fechaLaboral()}.xlsx`
 
-  const fp = path.join(os.tmpdir(), fileName)
+  const fp =
+    path.join(
+      os.tmpdir(),
+      fileName
+    )
 
   await wb.xlsx.writeFile(fp)
 
-  await sock.sendMessage(jid,{
-    document:fs.readFileSync(fp),
-    mimetype:
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    fileName,
-    caption:
-      `📊 Compras ${filtro.sucursal || ''} - `+
-      `${filtradas.length} regs - Total $${total}`
-  })
+  await sock.sendMessage(
+    jid,
+    {
+
+      document:
+        fs.readFileSync(fp),
+
+      mimetype:
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+
+      fileName,
+
+      caption:
+        `📊 Compras ` +
+        `${filtro.sucursal || ''} - ` +
+        `${filtradas.length} regs - ` +
+        `Total $${total}`
+
+    }
+  )
 
   fs.unlinkSync(fp)
 }
 
 function parseFiltroCompras(texto){
-  const low = normaliza(texto)
+
+  const low =
+    normaliza(texto)
 
   let suc = null
 
-  if(low.includes('bucareli')) suc='BUCARELI'
-  else if(low.includes('coyo')) suc='COYOACAN'
-  else if(low.includes('juarez')) suc='JUAREZ'
+  if(
+    low.includes('bucareli')
+  ){
+    suc = 'BUCARELI'
+
+  }else if(
+    low.includes('coyo')
+  ){
+    suc = 'COYOACAN'
+
+  }else if(
+    low.includes('juarez')
+  ){
+    suc = 'JUAREZ'
+  }
 
   let fecha = null
 
-  if(low.includes('hoy')){
-    fecha = fechaLaboral()
+  if(
+    low.includes('hoy')
+  ){
+    fecha =
+      fechaLaboral()
   }
 
   return {
+
     sucursal:suc,
+
     fecha
+
   }
 }
 
 export async function handleCompras({
+
   sock,
   jid,
   m,
   texto,
   esImagen
+
 }){
 
-  if(/^compras/i.test(texto)){
-    const f = parseFiltroCompras(texto)
+  if(
+    /^compras/i.test(texto)
+  ){
+
+    const f =
+      parseFiltroCompras(
+        texto
+      )
 
     await generarExcelCompras(
       f,
@@ -570,29 +1072,50 @@ export async function handleCompras({
     registrar compras mediante fotografías.
   */
 
-  if(esImagen && jid !== GRUPO_PRUEBAS_ID){
+  if(
+    esImagen &&
+    jid !== GRUPO_PRUEBAS_ID
+  ){
     return false
   }
 
   if(esImagen){
+
     try{
 
       if(!OPENAI_API_KEY){
-        await sock.sendMessage(jid,{
-          text:'❌ Falta OPENAI_API_KEY en Railway'
-        })
+
+        await sock.sendMessage(
+          jid,
+          {
+            text:
+              '❌ Falta OPENAI_API_KEY en Railway'
+          }
+        )
+
         return true
       }
 
-      const buffer = await downloadMediaMessage(
-        m,
-        'buffer',
-        {},
-        {
-          logger:P({level:'fatal'}),
-          reuploadRequest:sock.updateMediaMessage
-        }
-      )
+      const buffer =
+        await downloadMediaMessage(
+
+          m,
+
+          'buffer',
+
+          {},
+
+          {
+
+            logger:
+              P({
+                level:'fatal'
+              }),
+
+            reuploadRequest:
+              sock.updateMediaMessage
+          }
+        )
 
       /*
         No se manda mensaje de procesamiento.
@@ -600,50 +1123,98 @@ export async function handleCompras({
       */
 
       const datosIA =
-        await leerTicketConOpenAI(buffer)
+        await leerTicketConOpenAI(
+          buffer
+        )
 
       if(
         !datosIA ||
         datosIA.importe_total === '0' ||
         !datosIA.importe_total
       ){
-        await sock.sendMessage(jid,{
-          text:'❌ No pude leer el total. Manda una foto más clara.'
-        })
+
+        await sock.sendMessage(
+          jid,
+          {
+            text:
+              '❌ No pude leer el total. Manda una foto más clara.'
+          }
+        )
+
         return true
       }
 
       const fecha =
-        datosIA.fecha_ticket || fechaLaboral()
+        datosIA.fecha_ticket ||
+        fechaLaboral()
 
       const datosFinal = {
-        folio:datosIA.folio,
-        concepto:datosIA.concepto_sugerido,
-        proveedor:datosIA.proveedor,
-        monto:datosIA.importe_total,
+
+        folio:
+          datosIA.folio,
+
+        concepto:
+          datosIA.concepto_sugerido,
+
+        proveedor:
+          datosIA.proveedor,
+
+        monto:
+          datosIA.importe_total,
+
         fecha,
-        sucursal:'BUCARELI',
-        semana:obtenerSemanaCompras(fecha),
-        area:datosIA.area,
-        pagado:datosIA.pagado,
-        productos:datosIA.productos
+
+        /*
+          La sucursal NO viene del grupo.
+          Viene únicamente del sello detectado
+          en la imagen.
+        */
+
+        sucursal:
+          datosIA.sucursal,
+
+        semana:
+          obtenerSemanaCompras(
+            fecha
+          ),
+
+        area:
+          datosIA.area,
+
+        pagado:
+          datosIA.pagado,
+
+        productos:
+          datosIA.productos
       }
 
       const res =
-        await registrarCompra(datosFinal)
+        await registrarCompra(
+          datosFinal
+        )
 
-      await sock.sendMessage(jid,{
-        text:res.msg
-      })
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            res.msg
+        }
+      )
 
       return true
 
     }catch(e){
+
       console.error(e)
 
-      await sock.sendMessage(jid,{
-        text:'❌ Error al registrar compra: '+e.message
-      })
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            '❌ Error al registrar compra: ' +
+            e.message
+        }
+      )
 
       return true
     }
