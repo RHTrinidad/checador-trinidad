@@ -310,20 +310,11 @@ export async function handleChecador({
       return
     }
 
-    await registrarSalida({
-      fecha,
-      hora:ahora,
-      telefono:telefono10,
-      nombre,
-      sucursal:cercana.nombre,
-      distancia:dMin,
-      programada:horaSalida,
-      jornadaEntrada:horaEntrada,
-      horario,
-      emp,
-      sock,
-      jid
-    })
+   await responder(
+  sock,
+  jid,
+  `✅ Salida - ${nombre} en ${sucursal} - ${hora}`
+)
 
   }catch(e){
     console.error('Error en handleChecador:',e)
