@@ -20,6 +20,7 @@ const textoMensaje=m=>(
   m.message?.imageMessage?.caption||
   m.message?.videoMessage?.caption||
   m.message?.documentMessage?.caption||
+  m.message?.documentWithCaptionMessage?.message?.documentMessage?.caption||
   ''
 ).trim()
 
@@ -138,29 +139,21 @@ async function conectar(){
           const loc=obtenerLoc(m)
           const identidad=obtenerIdentidad(m)
 
-          /*
-            DIAGNOSTICO DEL MENSAJE
-          */
-
-          console.log('📩 MENSAJE:',{
-            jid,
-            tipoGrupo,
-            keys:Object.keys(m.message||{}),
-            texto
-          })
+          const doc=
+            m.message?.documentMessage||
+            m.message?.documentWithCaptionMessage?.message?.documentMessage
 
           const esImagen=!!m.message?.imageMessage
-          const esDocumento=!!m.message?.documentMessage
-          const esPDF=
-            esDocumento&&
-            (m.message?.documentMessage?.mimetype||'').toLowerCase()==='application/pdf'
+          const esDocumento=!!doc
+          const esPDF=(doc?.mimetype||'').toLowerCase()==='application/pdf'
 
           if(esDocumento){
             console.log('📄 DOCUMENTO:',{
-              mimetype:m.message?.documentMessage?.mimetype,
-              fileName:m.message?.documentMessage?.fileName,
-              caption:m.message?.documentMessage?.caption,
-              esPDF
+              mimetype:doc?.mimetype,
+              fileName:doc?.fileName,
+              caption:doc?.caption,
+              esPDF,
+              reenviado:!!m.message?.documentWithCaptionMessage
             })
           }
 
@@ -187,7 +180,6 @@ async function conectar(){
 
           /*
             PAGOS
-            Solo imagenes.
           */
 
           if(
@@ -208,7 +200,6 @@ async function conectar(){
 
           /*
             COMPRAS
-            Imagen / PDF / comando.
           */
 
           if(
@@ -220,10 +211,21 @@ async function conectar(){
             )
           ){
 
+            const mensajeCompras=
+              esPDF&&m.message?.documentWithCaptionMessage
+                ?{
+                    ...m,
+                    message:{
+                      ...m.message,
+                      documentMessage:doc
+                    }
+                  }
+                :m
+
             await handleCompras({
               sock,
               jid,
-              m,
+              m:mensajeCompras,
               texto,
               esImagen,
               esPDF
