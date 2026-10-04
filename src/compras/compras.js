@@ -1,4 +1,3 @@
-```js
 import { downloadMediaMessage } from '@whiskeysockets/baileys'
 import P from 'pino'
 import {
@@ -435,7 +434,6 @@ REGLAS:
           .replace(/,/g,''),
 
       /*
-        IMPORTANTE:
         Si el documento no tiene fecha,
         Fecha Documento queda vacía.
       */
@@ -493,7 +491,8 @@ async function buscarDuplicado(
   try{
 
     /*
-      Resumen Compras:
+      ========================================================
+      RESUMEN COMPRAS
 
       A Semana
       B Fecha de Captura
@@ -504,7 +503,8 @@ async function buscarDuplicado(
       G Importe
       H Concepto
       I Area
-      J Forma de pago
+      J forma de pago
+      ========================================================
     */
 
     const rows =
@@ -530,11 +530,6 @@ async function buscarDuplicado(
           .toString()
           .replace(/,/g,'')
       ) || 0
-
-    /*
-      Sin folio no hacemos esta validación,
-      conservando la lógica anterior.
-    */
 
     if(!folio)
       return false
@@ -568,8 +563,8 @@ async function buscarDuplicado(
         Si ambos comprobantes tienen fecha de documento,
         usamos esa fecha.
 
-        Si el documento no tiene fecha,
-        usamos Fecha de Captura como respaldo.
+        Si no tienen fecha de documento,
+        usamos Fecha de Captura.
       */
 
       const mismaFecha =
@@ -801,8 +796,8 @@ async function registrarCompra(
 
     Se conserva la lógica existente.
 
-    La fecha utilizada sigue siendo la fecha de captura,
-    ya que es la fecha en que el bot registra el insumo.
+    La fecha utilizada es Fecha de Captura,
+    ya que es cuando el bot registra el insumo.
   */
 
   try{
@@ -1004,10 +999,6 @@ export async function generarExcelCompras(
     wb.addWorksheet(
       'Compras'
     )
-
-  /*
-    Las 10 columnas reales de Resumen Compras.
-  */
 
   ws.addRow([
 
@@ -1353,5 +1344,20 @@ export async function handleCompras({
 
     }catch(e){
 
-      console.error
-```
+      console.error(e)
+
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            '❌ Error al registrar compra: ' +
+            e.message
+        }
+      )
+
+      return true
+    }
+  }
+
+  return false
+}
