@@ -1,42 +1,40 @@
-import { downloadMediaMessage } from '@whiskeysockets/baileys'
-import P from 'pino'
-import {
+import{downloadMediaMessage}from'@whiskeysockets/baileys'
+import P from'pino'
+import{
   SPREADSHEET_COMPRAS_ID,
-  GRUPO_PRUEBAS_ID
-} from '../config.js'
-import { fechaLaboral, normaliza } from '../utils.js'
-import { sheetsClient, getRows } from '../sheets.js'
+  GRUPO_PRUEBAS_ID,
+  GRUPO_COMPRAS_ID
+}from'../config.js'
+import{fechaLaboral,normaliza}from'../utils.js'
+import{sheetsClient,getRows}from'../sheets.js'
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY
-const SHEET_PAGOS = 'Pagos'
+const OPENAI_API_KEY=process.env.OPENAI_API_KEY
+const SHEET_PAGOS='Pagos'
 
 function limpiarTexto(valor){
-  return (valor || '').toString().trim()
+  return(valor||'').toString().trim()
 }
 
 function limpiarMonto(valor){
-  const limpio = (valor || '')
+  const limpio=(valor||'')
     .toString()
     .replace(/[$,\s]/g,'')
     .trim()
 
-  if(!limpio) return ''
+  if(!limpio)return''
 
-  const numero = parseFloat(limpio)
+  const numero=parseFloat(limpio)
 
   return Number.isNaN(numero)
-    ? ''
-    : numero.toFixed(2)
+    ?''
+    :numero.toFixed(2)
 }
 
 async function leerPagoConOpenAI(bufferImagen){
-
   try{
+    const base64=bufferImagen.toString('base64')
 
-    const base64 =
-      bufferImagen.toString('base64')
-
-    const res = await fetch(
+    const res=await fetch(
       'https://api.openai.com/v1/chat/completions',
       {
         method:'POST',
@@ -97,48 +95,66 @@ REGLAS:
       }
     )
 
-    const data = await res.json()
+    const data=await res.json()
 
-    const content =
-      data.choices?.[0]?.message?.content || ''
+    const content=
+      data.choices?.[0]?.message?.content||''
 
-    console.log('OpenAI PAGOS RAW:',content)
+    console.log(
+      'OpenAI PAGOS RAW:',
+      content
+    )
 
-    const match =
+    const match=
       content.match(/\{[\s\S]*\}/)
 
-    if(!match) return null
+    if(!match)return null
 
-    const json = JSON.parse(match[0])
+    const json=JSON.parse(match[0])
 
-    return {
+    return{
       tipo_documento:
-        limpiarTexto(json.tipo_documento).toUpperCase(),
+        limpiarTexto(
+          json.tipo_documento
+        ).toUpperCase(),
 
       fecha_pago:
-        limpiarTexto(json.fecha_pago),
+        limpiarTexto(
+          json.fecha_pago
+        ),
 
       destinatario:
-        limpiarTexto(json.destinatario),
+        limpiarTexto(
+          json.destinatario
+        ),
 
       monto:
-        limpiarMonto(json.monto),
+        limpiarMonto(
+          json.monto
+        ),
 
       banco:
-        limpiarTexto(json.banco),
+        limpiarTexto(
+          json.banco
+        ),
 
       cuenta_destino:
-        limpiarTexto(json.cuenta_destino),
+        limpiarTexto(
+          json.cuenta_destino
+        ),
 
       referencia:
-        limpiarTexto(json.referencia),
+        limpiarTexto(
+          json.referencia
+        ),
 
       concepto:
-        limpiarTexto(json.concepto)
+        limpiarTexto(
+          json.concepto
+        )
     }
 
   }catch(e){
-
     console.log(
       'OpenAI PAGOS:',
       e.message
@@ -149,97 +165,103 @@ REGLAS:
 }
 
 async function buscarDuplicado(datos){
-
   try{
-
-    const rows =
+    const rows=
       await getRows(
         `${SHEET_PAGOS}!A2:H`,
         SPREADSHEET_COMPRAS_ID
       )
 
-    const fechaPago =
+    const fechaPago=
       normaliza(
-        datos.fechaPago || ''
+        datos.fechaPago||''
       ).toUpperCase()
 
-    const destinatario =
+    const destinatario=
       normaliza(
-        datos.destinatario || ''
+        datos.destinatario||''
       ).toUpperCase()
 
-    const monto =
+    const monto=
       parseFloat(
-        datos.monto || '0'
-      ) || 0
+        datos.monto||'0'
+      )||0
 
-    const referencia =
+    const referencia=
       normaliza(
-        datos.referencia || ''
+        datos.referencia||''
       ).toUpperCase()
 
-    const banco =
+    const banco=
       normaliza(
-        datos.banco || ''
+        datos.banco||''
       ).toUpperCase()
 
     if(
-      !fechaPago ||
-      !destinatario ||
+      !fechaPago||
+      !destinatario||
       !monto
     ){
       return false
     }
 
     return rows.some(r=>{
+      const rFechaPago=
+        normaliza(
+          r[1]||''
+        ).toUpperCase()
 
-      const rFechaPago =
-        normaliza(r[1] || '').toUpperCase()
+      const rDestinatario=
+        normaliza(
+          r[2]||''
+        ).toUpperCase()
 
-      const rDestinatario =
-        normaliza(r[2] || '').toUpperCase()
-
-      const rMonto =
+      const rMonto=
         parseFloat(
-          (r[3] || '0')
+          (r[3]||'0')
             .toString()
             .replace(/[$,]/g,'')
-        ) || 0
+        )||0
 
-      const rBanco =
-        normaliza(r[4] || '').toUpperCase()
+      const rBanco=
+        normaliza(
+          r[4]||''
+        ).toUpperCase()
 
-      const rReferencia =
-        normaliza(r[6] || '').toUpperCase()
+      const rReferencia=
+        normaliza(
+          r[6]||''
+        ).toUpperCase()
 
-      if(rFechaPago !== fechaPago)
+      if(rFechaPago!==fechaPago)
         return false
 
-      if(rDestinatario !== destinatario)
+      if(rDestinatario!==destinatario)
         return false
 
       if(
-        Math.abs(rMonto - monto) >= 0.01
+        Math.abs(
+          rMonto-monto
+        )>=0.01
       ){
         return false
       }
 
       if(
-        referencia &&
+        referencia&&
         rReferencia
       ){
-        return referencia === rReferencia
+        return referencia===rReferencia
       }
 
-      return (
-        banco &&
-        rBanco &&
-        banco === rBanco
+      return(
+        banco&&
+        rBanco&&
+        banco===rBanco
       )
     })
 
   }catch(e){
-
     console.log(
       'Error buscando duplicado de pago:',
       e.message
@@ -253,32 +275,29 @@ async function obtenerSheetId(
   sClient,
   nombreHoja
 ){
-
-  const meta =
+  const meta=
     await sClient.spreadsheets.get({
       spreadsheetId:
         SPREADSHEET_COMPRAS_ID,
       fields:'sheets.properties'
     })
 
-  const hoja =
+  const hoja=
     meta.data.sheets?.find(
-      s =>
-        s.properties?.title === nombreHoja
+      s=>
+        s.properties?.title===
+        nombreHoja
     )
 
-  return hoja?.properties?.sheetId ?? 0
+  return hoja?.properties?.sheetId??0
 }
 
 async function marcarFilaDuplicada(rowNumber){
-
   try{
-
-    const sClient =
+    const sClient=
       await sheetsClient()
 
     await sClient.spreadsheets.batchUpdate({
-
       spreadsheetId:
         SPREADSHEET_COMPRAS_ID,
 
@@ -291,8 +310,10 @@ async function marcarFilaDuplicada(rowNumber){
                   sClient,
                   SHEET_PAGOS
                 ),
-              startRowIndex:rowNumber - 1,
-              endRowIndex:rowNumber,
+              startRowIndex:
+                rowNumber-1,
+              endRowIndex:
+                rowNumber,
               startColumnIndex:0,
               endColumnIndex:8
             },
@@ -313,7 +334,6 @@ async function marcarFilaDuplicada(rowNumber){
     })
 
   }catch(e){
-
     console.log(
       'Error marcando pago duplicado:',
       e.message
@@ -322,15 +342,15 @@ async function marcarFilaDuplicada(rowNumber){
 }
 
 async function registrarPago(datos){
-
-  const sClient =
+  const sClient=
     await sheetsClient()
 
-  const duplicado =
-    await buscarDuplicado(datos)
+  const duplicado=
+    await buscarDuplicado(
+      datos
+    )
 
   await sClient.spreadsheets.values.append({
-
     spreadsheetId:
       SPREADSHEET_COMPRAS_ID,
 
@@ -355,21 +375,18 @@ async function registrarPago(datos){
   })
 
   if(duplicado){
-
     try{
-
-      const rowsActuales =
+      const rowsActuales=
         await getRows(
           `${SHEET_PAGOS}!A2:H`,
           SPREADSHEET_COMPRAS_ID
         )
 
       await marcarFilaDuplicada(
-        rowsActuales.length + 1
+        rowsActuales.length+1
       )
 
     }catch(e){
-
       console.log(
         'Error marcando fila duplicada:',
         e.message
@@ -377,14 +394,14 @@ async function registrarPago(datos){
     }
   }
 
-  return {
+  return{
     ok:true,
     duplicado,
     msg:
-      `✅ Pago registrado · ` +
-      `Fecha ${datos.fechaPago || 'SIN FECHA'} · ` +
-      `${datos.destinatario || 'SIN DESTINATARIO'} · ` +
-      `$${datos.monto || '0.00'}`
+      `✅ Pago registrado · `+
+      `Fecha ${datos.fechaPago||'SIN FECHA'} · `+
+      `${datos.destinatario||'SIN DESTINATARIO'} · `+
+      `$${datos.monto||'0.00'}`
   }
 }
 
@@ -397,8 +414,9 @@ export async function handlePagos({
 }){
 
   if(
-    esImagen &&
-    jid !== GRUPO_PRUEBAS_ID
+    esImagen&&
+    jid!==GRUPO_PRUEBAS_ID&&
+    jid!==GRUPO_COMPRAS_ID
   ){
     return false
   }
@@ -409,7 +427,6 @@ export async function handlePagos({
   try{
 
     if(!OPENAI_API_KEY){
-
       await sock.sendMessage(
         jid,
         {
@@ -421,7 +438,7 @@ export async function handlePagos({
       return true
     }
 
-    const buffer =
+    const buffer=
       await downloadMediaMessage(
         m,
         'buffer',
@@ -435,11 +452,12 @@ export async function handlePagos({
         }
       )
 
-    const datosIA =
-      await leerPagoConOpenAI(buffer)
+    const datosIA=
+      await leerPagoConOpenAI(
+        buffer
+      )
 
     if(!datosIA){
-
       await sock.sendMessage(
         jid,
         {
@@ -452,13 +470,12 @@ export async function handlePagos({
     }
 
     if(
-      datosIA.tipo_documento !== 'PAGO'
+      datosIA.tipo_documento!=='PAGO'
     ){
       return false
     }
 
     if(!datosIA.monto){
-
       await sock.sendMessage(
         jid,
         {
@@ -470,34 +487,33 @@ export async function handlePagos({
       return true
     }
 
-    const datosFinal = {
-
+    const datosFinal={
       fechaCaptura:
         fechaLaboral(),
 
       fechaPago:
-        datosIA.fecha_pago || '',
+        datosIA.fecha_pago||'',
 
       destinatario:
-        datosIA.destinatario || '',
+        datosIA.destinatario||'',
 
       monto:
-        datosIA.monto || '',
+        datosIA.monto||'',
 
       banco:
-        datosIA.banco || '',
+        datosIA.banco||'',
 
       cuentaDestino:
-        datosIA.cuenta_destino || '',
+        datosIA.cuenta_destino||'',
 
       referencia:
-        datosIA.referencia || '',
+        datosIA.referencia||'',
 
       concepto:
-        datosIA.concepto || ''
+        datosIA.concepto||''
     }
 
-    const res =
+    const res=
       await registrarPago(
         datosFinal
       )
@@ -505,13 +521,7 @@ export async function handlePagos({
     await sock.sendMessage(
       jid,
       {
-        text:
-          res.msg +
-          (
-            res.duplicado
-              ? '\n⚠️ POSIBLE DUPLICADO — fila marcada en amarillo.'
-              : ''
-          )
+        text:res.msg
       }
     )
 
@@ -528,7 +538,7 @@ export async function handlePagos({
       jid,
       {
         text:
-          '❌ Error al registrar pago: ' +
+          '❌ Error al registrar pago: '+
           e.message
       }
     )
