@@ -26,6 +26,9 @@ const TOLERANCIA_MIN=15
 const AVISO_FALTA_MIN=20
 const CIERRE_AUTO_HORAS=16
 
+const TIEMPO_ANTI_DUPLICADO=8000
+const checajesRecientes=new Map()
+
 let ultimoRegistroDescansos=''
 
 function esDescanso(v){
@@ -277,6 +280,32 @@ export async function handleChecador({
         `⚠️ *${nombre}* ya tiene entrada y salida registradas hoy.`
       )
       return
+    }
+
+    /*
+      PROTECCIÓN ANTI-DUPLICADO:
+      Evita que la misma ubicación/evento se procese dos veces
+      casi al mismo tiempo.
+
+      No elimina la validación COMPLETO.
+      Después de 8 segundos una nueva ubicación se procesa normal.
+    */
+    const claveChecaje=
+      `${telefono10}|${fecha}|${tipoRegistro}|${cercana.nombre}`
+
+    const ahoraMs=Date.now()
+    const ultimo=checajesRecientes.get(claveChecaje)||0
+
+    if(ahoraMs-ultimo<TIEMPO_ANTI_DUPLICADO){
+      return
+    }
+
+    checajesRecientes.set(claveChecaje,ahoraMs)
+
+    for(const [clave,marca] of checajesRecientes){
+      if(ahoraMs-marca>TIEMPO_ANTI_DUPLICADO){
+        checajesRecientes.delete(clave)
+      }
     }
 
     const radio=tipoRegistro==='ENTRADA'
