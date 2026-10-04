@@ -20,19 +20,6 @@ const OPENAI_API_KEY=process.env.OPENAI_API_KEY
   ============================================================
   AGRUPADOR DE FOTOS
   ============================================================
-
-  Varias fotos enviadas seguidas pueden pertenecer a la misma
-  factura.
-
-  Ejemplo:
-  Foto 1 + Foto 2 + Foto 3 + Foto 4
-  =
-  una misma factura con todos sus insumos.
-
-  Si existen varias facturas dentro del mismo grupo de fotos,
-  OpenAI las separa.
-
-  Las fotos exactamente iguales se eliminan por hash.
 */
 
 const colasFotos=new Map()
@@ -83,20 +70,20 @@ async function agregarFotoACola({
 
     const hash=hashBuffer(buffer)
 
-    /*
-      Si exactamente la misma imagen ya fue recibida
-      recientemente, no vuelve a procesarse.
-    */
-
     if(hashesRecientes.has(hash)){
+
       console.log(
         'Foto duplicada ignorada:',
         jid
       )
+
       return false
     }
 
-    hashesRecientes.set(hash,Date.now())
+    hashesRecientes.set(
+      hash,
+      Date.now()
+    )
 
     let cola=colasFotos.get(jid)
 
@@ -107,12 +94,11 @@ async function agregarFotoACola({
         timer:null
       }
 
-      colasFotos.set(jid,cola)
+      colasFotos.set(
+        jid,
+        cola
+      )
     }
-
-    /*
-      Evita también duplicados dentro de la misma cola.
-    */
 
     if(
       cola.items.some(
@@ -129,7 +115,9 @@ async function agregarFotoACola({
     })
 
     if(cola.timer){
-      clearTimeout(cola.timer)
+      clearTimeout(
+        cola.timer
+      )
     }
 
     cola.timer=setTimeout(
@@ -165,142 +153,34 @@ async function procesarColaFotos(
 
   const cola=colasFotos.get(jid)
 
-  if(!cola||!cola.items.length)
+  if(
+    !cola||
+    !cola.items.length
+  ){
     return
+  }
 
-  colasFotos.delete(jid)
+  colasFotos.delete(
+    jid
+  )
 
   try{
 
-    const buffers=cola.items.map(
-      x=>x.buffer
-    )
+    const buffers=
+      cola.items.map(
+        x=>x.buffer
+      )
 
     const datosIA=
       await leerTicketsConOpenAI(
         buffers
       )
 
-    if(
-      !datosIA||
-      !Array.isArray(datosIA)||
-      !datosIA.length
-    ){
-
-      await sock.sendMessage(
-        jid,
-        {
-          text:
-            '❌ No pude identificar la factura. Manda las fotos nuevamente con mayor claridad.'
-        }
-      )
-
-      return
-    }
-
-    const fechaCaptura=fechaLaboral()
-
-    let registros=0
-    let duplicados=0
-    let totalInsumos=0
-
-    for(const documento of datosIA){
-
-      if(
-        !documento ||
-        documento.importe_total==='0' ||
-        !documento.importe_total
-      ){
-        continue
-      }
-
-      const datosFinal={
-
-        folio:
-          documento.folio,
-
-        concepto:
-          documento.concepto_sugerido,
-
-        proveedor:
-          documento.proveedor,
-
-        monto:
-          documento.importe_total,
-
-        fechaCaptura,
-
-        fechaDocumento:
-          documento.fecha_ticket || '',
-
-        sucursal:
-          documento.sucursal,
-
-        semana:
-          obtenerSemanaCompras(
-            fechaCaptura
-          ),
-
-        area:
-          documento.area,
-
-        pagado:
-          documento.pagado,
-
-        productos:
-          documento.productos
-
-      }
-
-      const res=
-        await registrarCompra(
-          datosFinal
-        )
-
-      registros++
-
-      if(res.duplicado)
-        duplicados++
-
-      totalInsumos+=
-        Array.isArray(datosFinal.productos)
-          ? datosFinal.productos.length
-          : 1
-    }
-
-    if(!registros){
-
-      await sock.sendMessage(
-        jid,
-        {
-          text:
-            '❌ No pude leer el total de ninguna factura. Manda las fotos nuevamente con mayor claridad.'
-        }
-      )
-
-      return
-    }
-
-    let mensaje=
-      registros===1
-        ? '✅ Compra registrada correctamente.'
-        : `✅ ${registros} compras registradas correctamente.`
-
-    if(totalInsumos){
-      mensaje+=
-        `\n📦 ${totalInsumos} insumos registrados.`
-    }
-
-    if(duplicados){
-      mensaje+=
-        `\n⚠️ ${duplicados} posible(s) duplicado(s) — fila(s) marcada(s) en amarillo.`
-    }
-
-    await sock.sendMessage(
+    await registrarDocumentosIA(
       jid,
-      {
-        text:mensaje
-      }
+      sock,
+      datosIA,
+      'fotografías'
     )
 
   }catch(e){
@@ -315,6 +195,171 @@ async function procesarColaFotos(
       {
         text:
           '❌ Error al procesar las fotografías: '+
+          e.message
+      }
+    )
+  }
+}
+
+/*
+  ============================================================
+  PROCESAR DOCUMENTOS IA
+  ============================================================
+*/
+
+async function registrarDocumentosIA(
+  jid,
+  sock,
+  datosIA,
+  tipoEntrada
+){
+
+  try{
+
+    if(
+      !datosIA||
+      !Array.isArray(datosIA)||
+      !datosIA.length
+    ){
+
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            `❌ No pude identificar la factura. Manda ${tipoEntrada} nuevamente con mayor claridad.`
+        }
+      )
+
+      return
+    }
+
+    const fechaCaptura=
+      fechaLaboral()
+
+    let registros=0
+    let duplicados=0
+    let totalInsumos=0
+
+    for(
+      const documento of datosIA
+    ){
+
+      if(
+        !documento||
+        documento.importe_total==='0'||
+        !documento.importe_total
+      ){
+        continue
+      }
+
+      const datosFinal={
+
+        folio:
+          documento.folio||'',
+
+        concepto:
+          documento.concepto_sugerido||'',
+
+        proveedor:
+          documento.proveedor||'',
+
+        monto:
+          documento.importe_total,
+
+        fechaCaptura,
+
+        fechaDocumento:
+          documento.fecha_ticket||'',
+
+        sucursal:
+          documento.sucursal||'',
+
+        semana:
+          obtenerSemanaCompras(
+            fechaCaptura
+          ),
+
+        area:
+          documento.area||'',
+
+        pagado:
+          documento.pagado===true,
+
+        productos:
+          documento.productos
+
+      }
+
+      const res=
+        await registrarCompra(
+          datosFinal
+        )
+
+      registros++
+
+      if(
+        res.duplicado
+      ){
+        duplicados++
+      }
+
+      totalInsumos+=
+        Array.isArray(
+          datosFinal.productos
+        )
+          ?datosFinal.productos.length
+          :1
+    }
+
+    if(!registros){
+
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            `❌ No pude leer el total de ninguna factura. Manda ${tipoEntrada} nuevamente con mayor claridad.`
+        }
+      )
+
+      return
+    }
+
+    let mensaje=
+      registros===1
+        ?'✅ Compra registrada correctamente.'
+        :`✅ ${registros} compras registradas correctamente.`
+
+    if(totalInsumos){
+
+      mensaje+=
+        `\n📦 ${totalInsumos} insumos registrados.`
+    }
+
+    if(duplicados){
+
+      mensaje+=
+        `\n⚠️ ${duplicados} posible(s) duplicado(s) — fila(s) marcada(s) en amarillo.`
+    }
+
+    await sock.sendMessage(
+      jid,
+      {
+        text:mensaje
+      }
+    )
+
+  }catch(e){
+
+    console.error(
+      'Error registrando documentos IA:',
+      e
+    )
+
+    await sock.sendMessage(
+      jid,
+      {
+        text:
+          '❌ Error al registrar la compra: '+
           e.message
       }
     )
@@ -338,7 +383,9 @@ async function obtenerConceptosCatalogo(){
 
     const conceptos=[]
 
-    for(const row of rows){
+    for(
+      const row of rows
+    ){
 
       const concepto=
         (row[0]||'')
@@ -348,7 +395,9 @@ async function obtenerConceptosCatalogo(){
       if(!concepto)
         continue
 
-      conceptos.push(concepto)
+      conceptos.push(
+        concepto
+      )
     }
 
     return conceptos
@@ -403,6 +452,7 @@ function obtenerSucursalValida(
     x==='BUCARELI'||
     x.includes('BUCARELI')
   ){
+
     return 'BUCARELI'
   }
 
@@ -411,6 +461,7 @@ function obtenerSucursalValida(
     x.includes('COYOACAN')||
     x.includes('COYOACÁN')
   ){
+
     return 'COYOACAN'
   }
 
@@ -426,8 +477,13 @@ function obtenerSemanaCompras(
       `${fecha}T12:00:00`
     )
 
-  if(Number.isNaN(d.getTime()))
+  if(
+    Number.isNaN(
+      d.getTime()
+    )
+  ){
     return ''
+  }
 
   const anio=
     d.getFullYear()
@@ -467,7 +523,7 @@ function obtenerSemanaCompras(
       diferenciaDias/7
     )+1
 
-  return (
+  return(
     `${String(numeroSemana).padStart(2,'0')}-`+
     `${String(anio).slice(-2)}`
   )
@@ -493,7 +549,9 @@ async function buscarProveedorCatalogo(
     if(!buscado)
       return 'PROVEEDOR OCASIONAL'
 
-    for(const row of rows){
+    for(
+      const row of rows
+    ){
 
       const oficial=
         (row[0]||'')
@@ -512,6 +570,7 @@ async function buscarProveedorCatalogo(
         normalizado.includes(buscado)||
         buscado.includes(normalizado)
       ){
+
         return oficial
       }
     }
@@ -531,29 +590,8 @@ async function buscarProveedorCatalogo(
 
 /*
   ============================================================
-  OPENAI
+  OPENAI FOTOS
   ============================================================
-
-  Recibe TODAS las fotos de un mismo lote.
-
-  Devuelve:
-
-  {
-    "documentos":[
-      {
-        factura 1
-      },
-      {
-        factura 2
-      }
-    ]
-  }
-
-  Si las fotos 1,2,3,4 son páginas de la misma factura,
-  devuelve UN SOLO documento con TODOS los productos.
-
-  Si las fotos contienen dos facturas diferentes,
-  devuelve DOS documentos.
 */
 
 async function leerTicketsConOpenAI(
@@ -567,8 +605,8 @@ async function leerTicketsConOpenAI(
 
     const listaConceptos=
       conceptosValidos.length>0
-        ? conceptosValidos.join(', ')
-        : '(NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J)'
+        ?conceptosValidos.join(', ')
+        :'(NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J)'
 
     const contenido=[
 
@@ -618,57 +656,43 @@ ${listaConceptos}
 REGLAS PARA AGRUPAR:
 
 - Si varias fotografías muestran distintas partes o páginas de LA MISMA FACTURA, deben formar UN SOLO documento.
-
 - NO crees una factura nueva solamente porque aparezca otra página.
-
 - Une TODOS los productos visibles de las diferentes fotografías de la misma factura.
-
-- Si una misma línea de producto aparece repetida porque dos fotografías muestran la misma zona, NO la dupliques.
-
+- Si una misma línea aparece repetida porque dos fotografías muestran la misma zona, NO la dupliques.
 - Si una fotografía es exactamente la misma página repetida, no dupliques sus productos.
-
 - Si existen facturas diferentes, crea un documento independiente para cada factura.
-
 - Un cambio claro de folio, total, proveedor o documento significa que probablemente es otra factura.
-
 - NO inventes información.
 
 REGLAS DEL PROVEEDOR:
-
 - proveedor: escribe exactamente lo que aparezca.
 - No inventes proveedores.
 
 REGLAS DEL FOLIO:
-
 - folio: usa el número real del comprobante si existe.
 - Si no existe folio, devuelve "".
 
 REGLAS DEL IMPORTE:
-
 - importe_total: busca TOTAL.
 - Devuelve solo número.
 - No inventes el importe.
 
 REGLAS DE FECHA:
-
 - fecha_ticket: fecha visible del comprobante.
 - Formato YYYY-MM-DD.
 - Si no existe o no es legible, devuelve "".
 - NO inventes una fecha.
 
 REGLAS DE CONCEPTO:
-
 - selecciona SOLO uno de los conceptos disponibles.
 - No inventes conceptos.
 - Si no hay coincidencia clara, devuelve "".
 
 REGLAS DE AREA:
-
 - solo puede ser COCINA, BARRA o GASTOS.
 - Si no hay evidencia clara, devuelve "".
 
 REGLAS DE SUCURSAL:
-
 La sucursal se determina UNICAMENTE mediante SELLO DE SUCURSAL visible.
 
 - BUCARELI → "BUCARELI"
@@ -686,14 +710,12 @@ NO deduzcas sucursal por:
 - grupo de WhatsApp
 
 REGLAS DE PAGADO:
-
 - true únicamente si se observa claramente PAGADO, sello de pagado o evidencia equivalente.
 - No marques pagado por suposición.
 - Sello de sucursal y sello de PAGADO son independientes.
 - Un sello de sucursal NO significa PAGADO.
 
 REGLAS DE PRODUCTOS:
-
 - Extrae TODOS los productos visibles de TODAS las páginas correspondientes a esa factura.
 - cantidad y precio deben ser números cuando sea posible.
 - unidad puede ser KG, PIEZA, CAJA, LITRO, etc.
@@ -709,7 +731,9 @@ Si una factura ocupa 4 fotografías:
 
     ]
 
-    for(const buffer of buffers){
+    for(
+      const buffer of buffers
+    ){
 
       contenido.push({
 
@@ -756,6 +780,16 @@ Si una factura ocupa 4 fotografías:
     const data=
       await res.json()
 
+    if(!res.ok){
+
+      console.log(
+        'OpenAI COMPRAS FOTO ERROR:',
+        data
+      )
+
+      return null
+    }
+
     const content=
       data.choices?.[0]?.message?.content||
       ''
@@ -766,18 +800,24 @@ Si una factura ocupa 4 fotografías:
     )
 
     const match=
-      content.match(/\{[\s\S]*\}/)
+      content.match(
+        /\{[\s\S]*\}/
+      )
 
     if(!match)
       return null
 
     const json=
-      JSON.parse(match[0])
+      JSON.parse(
+        match[0]
+      )
 
     const documentos=
-      Array.isArray(json.documentos)
-        ? json.documentos
-        : []
+      Array.isArray(
+        json.documentos
+      )
+        ?json.documentos
+        :[]
 
     return documentos.map(
       documento=>({
@@ -808,10 +848,10 @@ Si una factura ocupa 4 fotografías:
               .toString()
               .toUpperCase()
           )
-            ? documento.area
-                .toString()
-                .toUpperCase()
-            : '',
+            ?documento.area
+              .toString()
+              .toUpperCase()
+            :'',
 
         sucursal:
           obtenerSucursalValida(
@@ -825,8 +865,8 @@ Si una factura ocupa 4 fotografías:
           Array.isArray(
             documento.productos
           )
-            ? documento.productos
-            : []
+            ?documento.productos
+            :[]
 
       })
     )
@@ -834,11 +874,408 @@ Si una factura ocupa 4 fotografías:
   }catch(e){
 
     console.log(
-      'OpenAI fail:',
+      'OpenAI FOTO fail:',
       e.message
     )
 
     return null
+  }
+}
+
+/*
+  ============================================================
+  OPENAI PDF
+  ============================================================
+*/
+
+async function leerPDFConOpenAI(
+  buffer,
+  nombreArchivo='comprobante.pdf'
+){
+
+  try{
+
+    const conceptosValidos=
+      await obtenerConceptosCatalogo()
+
+    const listaConceptos=
+      conceptosValidos.length>0
+        ?conceptosValidos.join(', ')
+        :'(NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J)'
+
+    const prompt=`Eres lector de comprobantes de compras para restaurante Trinidad.
+
+Recibirás un archivo PDF.
+
+El PDF puede tener UNA O VARIAS páginas.
+
+IMPORTANTE:
+- Varias páginas pueden pertenecer a UNA MISMA FACTURA.
+- Un PDF también puede contener VARIAS FACTURAS diferentes.
+- Debes identificar correctamente cada documento.
+- No crees una factura nueva solamente porque cambie de página.
+- Si varias páginas pertenecen al mismo comprobante, únelas en UN SOLO documento.
+- Extrae TODOS los productos de todas las páginas de ese documento.
+- Si existen varias facturas realmente diferentes, crea un documento independiente para cada una.
+- No inventes información.
+
+Devuelve SOLO JSON válido:
+
+{
+  "documentos":[
+    {
+      "proveedor":"",
+      "folio":"",
+      "importe_total":"",
+      "fecha_ticket":"",
+      "concepto":"",
+      "area":"",
+      "sucursal":"",
+      "pagado":false,
+      "productos":[
+        {
+          "nombre":"",
+          "cantidad":"",
+          "unidad":"",
+          "precio":"",
+          "total":""
+        }
+      ]
+    }
+  ]
+}
+
+CONCEPTOS DISPONIBLES EN GOOGLE SHEETS:
+${listaConceptos}
+
+REGLAS DEL PROVEEDOR:
+- proveedor: escribe exactamente lo visible.
+- No inventes proveedores.
+- Después el sistema validará el proveedor contra Google Sheets.
+
+REGLAS DEL FOLIO:
+- Usa el número real del comprobante si existe.
+- Si no existe o no es legible, devuelve "".
+
+REGLAS DEL IMPORTE:
+- Busca TOTAL, IMPORTE TOTAL o equivalente.
+- Devuelve solamente el número.
+- No inventes el importe.
+
+REGLAS DE FECHA:
+- Usa la fecha visible del documento.
+- Formato YYYY-MM-DD.
+- Si no existe o no es legible, devuelve "".
+- NO uses la fecha de captura como fecha del documento.
+
+REGLAS DE CONCEPTO:
+- Selecciona SOLO uno de los conceptos disponibles.
+- No inventes conceptos.
+- Si no hay coincidencia clara, devuelve "".
+
+REGLAS DE AREA:
+- Solo puede ser COCINA, BARRA o GASTOS.
+- Si no hay evidencia clara, devuelve "".
+
+REGLAS DE SUCURSAL:
+La sucursal se determina UNICAMENTE mediante SELLO DE SUCURSAL visible.
+
+- BUCARELI → "BUCARELI"
+- COYOACAN o COYOACÁN → "COYOACAN"
+- Sin sello claramente visible → ""
+
+NO deduzcas sucursal por:
+- proveedor
+- dirección
+- RFC
+- teléfono
+- encabezado
+- domicilio
+- texto del documento
+- nombre del archivo
+
+REGLAS DE PAGADO:
+- true únicamente si aparece claramente PAGADO, sello de pagado o evidencia equivalente.
+- No marques PAGADO por suposición.
+- El sello de sucursal y el sello de PAGADO son independientes.
+
+REGLAS DE PRODUCTOS:
+- Extrae TODOS los productos visibles.
+- Incluye productos de TODAS las páginas pertenecientes a la misma factura.
+- No dupliques productos.
+- Si una página repite información de otra, no vuelvas a registrar las mismas líneas.
+- cantidad y precio deben ser números cuando sea posible.
+- unidad puede ser KG, PIEZA, CAJA, LITRO, etc.
+- Si un dato no es legible, déjalo vacío.
+- No inventes productos.
+
+Si el PDF tiene 4 páginas de UNA factura:
+→ 1 solo documento
+→ 1 solo registro en Resumen Compras
+→ TODOS sus productos en Insumos.`
+
+    const base64=
+      buffer.toString(
+        'base64'
+      )
+
+    const res=
+      await fetch(
+        'https://api.openai.com/v1/responses',
+        {
+          method:'POST',
+
+          headers:{
+            'Authorization':
+              `Bearer ${OPENAI_API_KEY}`,
+            'Content-Type':
+              'application/json'
+          },
+
+          body:JSON.stringify({
+
+            model:'gpt-4o',
+
+            input:[
+              {
+                role:'user',
+
+                content:[
+
+                  {
+                    type:'input_text',
+                    text:prompt
+                  },
+
+                  {
+                    type:'input_file',
+
+                    filename:
+                      nombreArchivo||'comprobante.pdf',
+
+                    file_data:
+                      `data:application/pdf;base64,${base64}`
+                  }
+
+                ]
+              }
+            ]
+          })
+        }
+      )
+
+    const data=
+      await res.json()
+
+    if(!res.ok){
+
+      console.log(
+        'OpenAI PDF ERROR:',
+        data
+      )
+
+      return null
+    }
+
+    const content=
+      data.output_text||
+      ''
+
+    console.log(
+      'OpenAI COMPRAS PDF RAW:',
+      content
+    )
+
+    const match=
+      content.match(
+        /\{[\s\S]*\}/
+      )
+
+    if(!match)
+      return null
+
+    const json=
+      JSON.parse(
+        match[0]
+      )
+
+    const documentos=
+      Array.isArray(
+        json.documentos
+      )
+        ?json.documentos
+        :[]
+
+    return documentos.map(
+      documento=>({
+
+        proveedor:
+          documento.proveedor||'',
+
+        folio:
+          documento.folio||'',
+
+        importe_total:
+          (documento.importe_total||'0')
+            .toString()
+            .replace(/,/g,''),
+
+        fecha_ticket:
+          documento.fecha_ticket||'',
+
+        concepto_sugerido:
+          obtenerConceptoValido(
+            documento.concepto,
+            conceptosValidos
+          ),
+
+        area:
+          ['COCINA','BARRA','GASTOS'].includes(
+            (documento.area||'')
+              .toString()
+              .toUpperCase()
+          )
+            ?documento.area
+              .toString()
+              .toUpperCase()
+            :'',
+
+        sucursal:
+          obtenerSucursalValida(
+            documento.sucursal
+          ),
+
+        pagado:
+          documento.pagado===true,
+
+        productos:
+          Array.isArray(
+            documento.productos
+          )
+            ?documento.productos
+            :[]
+
+      })
+    )
+
+  }catch(e){
+
+    console.log(
+      'OpenAI PDF fail:',
+      e.message
+    )
+
+    return null
+  }
+}
+
+/*
+  ============================================================
+  PDF
+  ============================================================
+*/
+
+async function procesarPDF({
+  sock,
+  jid,
+  m
+}){
+
+  try{
+
+    if(!OPENAI_API_KEY){
+
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            '❌ Falta OPENAI_API_KEY en Railway'
+        }
+      )
+
+      return true
+    }
+
+    const buffer=
+      await downloadMediaMessage(
+        m,
+        'buffer',
+        {},
+        {
+          logger:P({level:'fatal'}),
+          reuploadRequest:
+            sock.updateMediaMessage
+        }
+      )
+
+    limpiarHashesRecientes()
+
+    const hash=
+      hashBuffer(buffer)
+
+    if(
+      hashesRecientes.has(hash)
+    ){
+
+      console.log(
+        'PDF duplicado ignorado:',
+        jid
+      )
+
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            '⚠️ Este PDF ya fue recibido recientemente y no se volverá a registrar.'
+        }
+      )
+
+      return true
+    }
+
+    hashesRecientes.set(
+      hash,
+      Date.now()
+    )
+
+    const nombreArchivo=
+      m.message
+        ?.documentMessage
+        ?.fileName||
+      'comprobante.pdf'
+
+    const datosIA=
+      await leerPDFConOpenAI(
+        buffer,
+        nombreArchivo
+      )
+
+    await registrarDocumentosIA(
+      jid,
+      sock,
+      datosIA,
+      'el PDF'
+    )
+
+    return true
+
+  }catch(e){
+
+    console.error(
+      'Error procesando PDF:',
+      e
+    )
+
+    await sock.sendMessage(
+      jid,
+      {
+        text:
+          '❌ Error al procesar el PDF: '+
+          e.message
+      }
+    )
+
+    return true
   }
 }
 
@@ -911,11 +1348,12 @@ async function buscarDuplicado(
         const mismaFecha=
           fechaDocumento&&
           rFechaDocumento
-            ? rFechaDocumento===fechaDocumento
-            : rFechaCaptura===fechaCaptura
+            ?rFechaDocumento===
+              fechaDocumento
+            :rFechaCaptura===
+              fechaCaptura
 
         return(
-
           rProveedor===
             normaliza(
               proveedorFinal
@@ -1071,8 +1509,8 @@ async function registrarCompra(
 
   const formaPago=
     datos.pagado
-      ? 'PAGADO'
-      : ''
+      ?'PAGADO'
+      :''
 
   /*
     RESUMEN COMPRAS
@@ -1243,11 +1681,8 @@ async function registrarCompra(
 
   /*
     DUPLICADO:
-    Se conserva exactamente la lógica actual.
-
-    Primero registra la compra.
-    Después, si ya existía, marca la NUEVA fila
-    en amarillo.
+    Primero registra.
+    Después marca la NUEVA fila.
   */
 
   if(duplicado){
@@ -1291,8 +1726,8 @@ async function registrarCompra(
       `$${datos.monto}`+
       `${
         datos.sucursal
-          ? ` · ${datos.sucursal}`
-          : ''
+          ?` · ${datos.sucursal}`
+          :''
       }`
   }
 }
@@ -1416,7 +1851,9 @@ export async function generarExcelCompras(
       fileName
     )
 
-  await wb.xlsx.writeFile(fp)
+  await wb.xlsx.writeFile(
+    fp
+  )
 
   await sock.sendMessage(
     jid,
@@ -1438,7 +1875,9 @@ export async function generarExcelCompras(
     }
   )
 
-  fs.unlinkSync(fp)
+  fs.unlinkSync(
+    fp
+  )
 }
 
 function parseFiltroCompras(
@@ -1497,7 +1936,8 @@ export async function handleCompras({
   jid,
   m,
   texto,
-  esImagen
+  esImagen,
+  esPDF
 
 }){
 
@@ -1529,12 +1969,53 @@ export async function handleCompras({
   */
 
   if(
-    esImagen&&
+    (
+      esImagen||
+      esPDF
+    )&&
     jid!==GRUPO_PRUEBAS_ID
   ){
 
     return false
   }
+
+  /*
+    PDF
+  */
+
+  if(esPDF){
+
+    try{
+
+      return await procesarPDF({
+        sock,
+        jid,
+        m
+      })
+
+    }catch(e){
+
+      console.error(
+        'Error en PDF Compras:',
+        e
+      )
+
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            '❌ Error al recibir PDF: '+
+            e.message
+        }
+      )
+
+      return true
+    }
+  }
+
+  /*
+    FOTOS
+  */
 
   if(esImagen){
 
@@ -1553,19 +2034,13 @@ export async function handleCompras({
         return true
       }
 
-      /*
-        NO procesamos inmediatamente.
-
-        La fotografía entra a una cola durante
-        5 segundos para permitir que lleguen
-        las demás páginas de la misma factura.
-      */
-
       await agregarFotoACola({
+
         sock,
         jid,
         m,
         texto
+
       })
 
       return true
