@@ -324,7 +324,40 @@ async function conectar(){
                   ?.mimetype||''
               )
                 .toLowerCase()===
-                'application/pdf'
+              'application/pdf'
+
+            /*
+              DIAGNOSTICO TEMPORAL
+              Nos permite comprobar que WhatsApp/Baileys
+              realmente esta entregando el PDF.
+            */
+
+            if(esDocumento){
+
+              console.log(
+                '📄 DOCUMENTO RECIBIDO:',
+                {
+                  jid,
+                  tipoGrupo,
+                  mimetype:
+                    m.message
+                      ?.documentMessage
+                      ?.mimetype,
+
+                  fileName:
+                    m.message
+                      ?.documentMessage
+                      ?.fileName,
+
+                  caption:
+                    m.message
+                      ?.documentMessage
+                      ?.caption,
+
+                  esPDF
+                }
+              )
+            }
 
             /*
               =================================================
@@ -402,7 +435,7 @@ async function conectar(){
               =================================================
 
               FOTO:
-              compras.js agrupa fotografías consecutivas.
+              compras.js agrupa fotografias consecutivas.
 
               PDF:
               compras.js descarga y analiza el PDF.
