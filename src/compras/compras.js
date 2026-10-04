@@ -1,3 +1,4 @@
+```js
 import { downloadMediaMessage } from '@whiskeysockets/baileys'
 import P from 'pino'
 import {
@@ -20,13 +21,11 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY
   CATALOGO DE CONCEPTOS
   ============================================================
 
-  Los conceptos YA NO se mantienen aquí manualmente.
-
-  Se leen directamente de:
+  Los conceptos se leen directamente de:
 
   lista Proveedores!J2:J
 
-  Así puedes agregar o quitar conceptos desde Google Sheets
+  Así se pueden agregar o quitar conceptos desde Google Sheets
   sin modificar este archivo.
 */
 
@@ -43,9 +42,10 @@ async function obtenerConceptosCatalogo(){
 
     for(const row of rows){
 
-      const concepto = (row[0] || '')
-        .toString()
-        .trim()
+      const concepto =
+        (row[0] || '')
+          .toString()
+          .trim()
 
       if(!concepto) continue
 
@@ -65,7 +65,10 @@ async function obtenerConceptosCatalogo(){
   }
 }
 
-function obtenerConceptoValido(valor, conceptosValidos){
+function obtenerConceptoValido(
+  valor,
+  conceptosValidos
+){
 
   const x =
     normaliza(valor || '')
@@ -74,9 +77,11 @@ function obtenerConceptoValido(valor, conceptosValidos){
 
   if(!x) return ''
 
-  const encontrado = conceptosValidos.find(c =>
-    normaliza(c).toUpperCase() === x
-  )
+  const encontrado =
+    conceptosValidos.find(c =>
+      normaliza(c)
+        .toUpperCase() === x
+    )
 
   return encontrado || ''
 }
@@ -113,7 +118,8 @@ function obtenerSemanaCompras(fecha){
   const d =
     new Date(`${fecha}T12:00:00`)
 
-  if(Number.isNaN(d.getTime())) return ''
+  if(Number.isNaN(d.getTime()))
+    return ''
 
   /*
     La semana empieza en martes y termina en lunes.
@@ -121,15 +127,21 @@ function obtenerSemanaCompras(fecha){
     La primera semana del año es la que contiene
     el 1 de enero.
 
-    Para 2026:
-    01-26 = martes 30/12/2025 a lunes 05/01/2026
-    40-26 = martes 29/09/2026 a lunes 05/10/2026
+    IMPORTANTE:
+    Esta función recibe SIEMPRE la Fecha de Captura,
+    nunca la Fecha Documento.
   */
 
-  const anio = d.getFullYear()
+  const anio =
+    d.getFullYear()
 
   const inicioAnio =
-    new Date(anio, 0, 1, 12)
+    new Date(
+      anio,
+      0,
+      1,
+      12
+    )
 
   const diaSemana =
     inicioAnio.getDay()
@@ -166,10 +178,11 @@ async function buscarProveedorCatalogo(nombre){
 
   try{
 
-    const rows = await getRows(
-      'lista Proveedores!A2:A',
-      SPREADSHEET_COMPRAS_ID
-    )
+    const rows =
+      await getRows(
+        'lista Proveedores!A2:A',
+        SPREADSHEET_COMPRAS_ID
+      )
 
     const buscado =
       normaliza(nombre || '')
@@ -214,17 +227,14 @@ async function buscarProveedorCatalogo(nombre){
   }
 }
 
-async function leerTicketConOpenAI(bufferImagen){
+async function leerTicketConOpenAI(
+  bufferImagen
+){
 
   try{
 
     const conceptosValidos =
       await obtenerConceptosCatalogo()
-
-    /*
-      Si no hay conceptos configurados en J,
-      no inventamos ninguno.
-    */
 
     const listaConceptos =
       conceptosValidos.length > 0
@@ -271,7 +281,7 @@ Devuelve SOLO JSON válido con esta estructura:
   "proveedor": "",
   "folio": "",
   "importe_total": "",
-  "fecha_ticket": "YYYY-MM-DD",
+  "fecha_ticket": "",
   "concepto": "",
   "area": "",
   "sucursal": "",
@@ -300,8 +310,11 @@ REGLAS:
 
 - importe_total: busca TOTAL y devuelve solo número.
 
-- fecha_ticket: usa la fecha visible.
-- Si no es legible devuelve "".
+- fecha_ticket:
+  usa la fecha visible en el comprobante.
+  Devuelve formato YYYY-MM-DD.
+  Si no existe fecha o no es legible, devuelve "".
+  NO inventes una fecha.
 
 - concepto:
   selecciona SOLO uno de los conceptos disponibles
@@ -330,19 +343,12 @@ REGLAS:
   devuelve "".
 
 - NO deduzcas la sucursal por el proveedor.
-
 - NO deduzcas la sucursal por la dirección.
-
 - NO deduzcas la sucursal por RFC.
-
 - NO deduzcas la sucursal por teléfono.
-
 - NO deduzcas la sucursal por encabezado.
-
 - NO deduzcas la sucursal por domicilio.
-
 - NO deduzcas la sucursal por texto de la factura.
-
 - NO deduzcas la sucursal por el grupo de WhatsApp.
 
 - La ausencia de sello significa sucursal "".
@@ -428,9 +434,14 @@ REGLAS:
           .toString()
           .replace(/,/g,''),
 
+      /*
+        IMPORTANTE:
+        Si el documento no tiene fecha,
+        Fecha Documento queda vacía.
+      */
+
       fecha_ticket:
-        json.fecha_ticket ||
-        fechaLaboral(),
+        json.fecha_ticket || '',
 
       concepto_sugerido:
         obtenerConceptoValido(
@@ -481,9 +492,24 @@ async function buscarDuplicado(
 
   try{
 
+    /*
+      Resumen Compras:
+
+      A Semana
+      B Fecha de Captura
+      C Fecha Documento
+      D Sucursal
+      E Proveedor
+      F # Comprobante
+      G Importe
+      H Concepto
+      I Area
+      J Forma de pago
+    */
+
     const rows =
       await getRows(
-        `${SHEET_RESUMEN}!A2:I`,
+        `${SHEET_RESUMEN}!A2:J`,
         SPREADSHEET_COMPRAS_ID
       )
 
@@ -492,8 +518,11 @@ async function buscarDuplicado(
         datos.folio || ''
       ).toUpperCase()
 
-    const fecha =
-      datos.fecha
+    const fechaDocumento =
+      datos.fechaDocumento || ''
+
+    const fechaCaptura =
+      datos.fechaCaptura || ''
 
     const monto =
       parseFloat(
@@ -502,6 +531,11 @@ async function buscarDuplicado(
           .replace(/,/g,'')
       ) || 0
 
+    /*
+      Sin folio no hacemos esta validación,
+      conservando la lógica anterior.
+    */
+
     if(!folio)
       return false
 
@@ -509,23 +543,40 @@ async function buscarDuplicado(
 
       const rProveedor =
         normaliza(
-          r[3] || ''
+          r[4] || ''
         ).toUpperCase()
 
       const rFolio =
         normaliza(
-          r[4] || ''
+          r[5] || ''
         ).toUpperCase()
 
-      const rFecha =
+      const rFechaDocumento =
+        r[2] || ''
+
+      const rFechaCaptura =
         r[1] || ''
 
       const rMonto =
         parseFloat(
-          (r[5] || '0')
+          (r[6] || '0')
             .toString()
             .replace(/,/g,'')
         ) || 0
+
+      /*
+        Si ambos comprobantes tienen fecha de documento,
+        usamos esa fecha.
+
+        Si el documento no tiene fecha,
+        usamos Fecha de Captura como respaldo.
+      */
+
+      const mismaFecha =
+        fechaDocumento &&
+        rFechaDocumento
+          ? rFechaDocumento === fechaDocumento
+          : rFechaCaptura === fechaCaptura
 
       return (
 
@@ -540,14 +591,13 @@ async function buscarDuplicado(
 
         &&
 
-        rFecha === fecha
+        mismaFecha
 
         &&
 
         Math.abs(
           rMonto - monto
         ) < 0.01
-
       )
     })
 
@@ -599,8 +649,12 @@ async function marcarFilaDuplicada(
                 startColumnIndex:
                   0,
 
+                /*
+                  A:J = 10 columnas
+                */
+
                 endColumnIndex:
-                  9
+                  10
               },
 
               cell:{
@@ -662,7 +716,9 @@ async function obtenerSheetId(
   )
 }
 
-async function registrarCompra(datos){
+async function registrarCompra(
+  datos
+){
 
   const sClient =
     await sheetsClient()
@@ -683,13 +739,30 @@ async function registrarCompra(datos){
       ? 'PAGADO'
       : ''
 
+  /*
+    ==========================================================
+    RESUMEN COMPRAS
+
+    A Semana
+    B Fecha de Captura
+    C Fecha Documento
+    D Sucursal
+    E Proveedor
+    F # Comprobante
+    G Importe
+    H Concepto
+    I Area
+    J forma de pago
+    ==========================================================
+  */
+
   await sClient.spreadsheets.values.append({
 
     spreadsheetId:
       SPREADSHEET_COMPRAS_ID,
 
     range:
-      `${SHEET_RESUMEN}!A:I`,
+      `${SHEET_RESUMEN}!A:J`,
 
     valueInputOption:
       'USER_ENTERED',
@@ -699,7 +772,9 @@ async function registrarCompra(datos){
 
         datos.semana,
 
-        datos.fecha,
+        datos.fechaCaptura,
+
+        datos.fechaDocumento,
 
         datos.sucursal,
 
@@ -718,6 +793,17 @@ async function registrarCompra(datos){
       ]]
     }
   })
+
+  /*
+    ==========================================================
+    INSUMOS
+    ==========================================================
+
+    Se conserva la lógica existente.
+
+    La fecha utilizada sigue siendo la fecha de captura,
+    ya que es la fecha en que el bot registra el insumo.
+  */
 
   try{
 
@@ -748,7 +834,7 @@ async function registrarCompra(datos){
 
           datos.sucursal,
 
-          datos.fecha
+          datos.fechaCaptura
 
         ])
 
@@ -798,7 +884,7 @@ async function registrarCompra(datos){
 
             datos.sucursal,
 
-            datos.fecha
+            datos.fechaCaptura
 
           ]]
         }
@@ -824,7 +910,7 @@ async function registrarCompra(datos){
 
       const rowsActuales =
         await getRows(
-          `${SHEET_RESUMEN}!A2:I`,
+          `${SHEET_RESUMEN}!A2:J`,
           SPREADSHEET_COMPRAS_ID
         )
 
@@ -852,11 +938,12 @@ async function registrarCompra(datos){
 
     msg:
       `✅ Compra registrada · ` +
-      `${datos.fecha} · ` +
+      `Captura ${datos.fechaCaptura} · ` +
+      `Documento ${datos.fechaDocumento || 'SIN FECHA'} · ` +
       `${proveedorFinal} · ` +
       `${datos.folio || 'SIN FOLIO'} · ` +
-      `$${datos.monto} · ` +
-      `${datos.sucursal}`
+      `$${datos.monto}` +
+      `${datos.sucursal ? ` · ${datos.sucursal}` : ''}`
 
   }
 }
@@ -869,17 +956,21 @@ export async function generarExcelCompras(
 
   const rows =
     await getRows(
-      `${SHEET_RESUMEN}!A2:I`,
+      `${SHEET_RESUMEN}!A2:J`,
       SPREADSHEET_COMPRAS_ID
     )
 
   let filtradas =
     rows.filter(r=>{
 
+      /*
+        D = Sucursal
+      */
+
       if(
         filtro.sucursal &&
 
-        !(r[2] || '')
+        !(r[3] || '')
           .toUpperCase()
           .includes(
             filtro.sucursal
@@ -889,6 +980,12 @@ export async function generarExcelCompras(
       ){
         return false
       }
+
+      /*
+        B = Fecha de Captura
+
+        "hoy" significa compras capturadas hoy.
+      */
 
       if(
         filtro.fecha &&
@@ -908,10 +1005,15 @@ export async function generarExcelCompras(
       'Compras'
     )
 
+  /*
+    Las 10 columnas reales de Resumen Compras.
+  */
+
   ws.addRow([
 
     'Semana',
-    'Fecha',
+    'Fecha de Captura',
+    'Fecha Documento',
     'Sucursal',
     'Proveedor',
     '#Comprobante',
@@ -929,6 +1031,10 @@ export async function generarExcelCompras(
       ws.addRow(r)
   )
 
+  /*
+    Importe = columna G = índice 6
+  */
+
   const total =
     filtradas.reduce(
 
@@ -936,7 +1042,7 @@ export async function generarExcelCompras(
         a +
         (
           parseFloat(
-            (r[5] || '0')
+            (r[6] || '0')
               .toString()
               .replace(/,/g,'')
           ) || 0
@@ -949,6 +1055,7 @@ export async function generarExcelCompras(
 
   ws.addRow([
     'TOTAL',
+    '',
     '',
     '',
     '',
@@ -998,7 +1105,9 @@ export async function generarExcelCompras(
   fs.unlinkSync(fp)
 }
 
-function parseFiltroCompras(texto){
+function parseFiltroCompras(
+  texto
+){
 
   const low =
     normaliza(texto)
@@ -1008,17 +1117,23 @@ function parseFiltroCompras(texto){
   if(
     low.includes('bucareli')
   ){
-    suc = 'BUCARELI'
+
+    suc =
+      'BUCARELI'
 
   }else if(
     low.includes('coyo')
   ){
-    suc = 'COYOACAN'
+
+    suc =
+      'COYOACAN'
 
   }else if(
     low.includes('juarez')
   ){
-    suc = 'JUAREZ'
+
+    suc =
+      'JUAREZ'
   }
 
   let fecha = null
@@ -1026,6 +1141,7 @@ function parseFiltroCompras(texto){
   if(
     low.includes('hoy')
   ){
+
     fecha =
       fechaLaboral()
   }
@@ -1049,6 +1165,12 @@ export async function handleCompras({
 
 }){
 
+  /*
+    ==========================================================
+    REPORTES DE COMPRAS
+    ==========================================================
+  */
+
   if(
     /^compras/i.test(texto)
   ){
@@ -1068,14 +1190,21 @@ export async function handleCompras({
   }
 
   /*
+    ==========================================================
+    RESTRICCIÓN ACTUAL
+    ==========================================================
+
     Por ahora SOLO el grupo de pruebas puede
     registrar compras mediante fotografías.
+
+    Esta lógica se conserva.
   */
 
   if(
     esImagen &&
     jid !== GRUPO_PRUEBAS_ID
   ){
+
     return false
   }
 
@@ -1144,9 +1273,26 @@ export async function handleCompras({
         return true
       }
 
-      const fecha =
-        datosIA.fecha_ticket ||
+      /*
+        ======================================================
+        FECHAS
+
+        Fecha de Captura:
+        cuando el bot recibe el comprobante.
+
+        Fecha Documento:
+        fecha visible en la factura/ticket.
+
+        Semana:
+        SIEMPRE calculada con Fecha de Captura.
+        ======================================================
+      */
+
+      const fechaCaptura =
         fechaLaboral()
+
+      const fechaDocumento =
+        datosIA.fecha_ticket || ''
 
       const datosFinal = {
 
@@ -1162,7 +1308,9 @@ export async function handleCompras({
         monto:
           datosIA.importe_total,
 
-        fecha,
+        fechaCaptura,
+
+        fechaDocumento,
 
         /*
           La sucursal NO viene del grupo.
@@ -1175,7 +1323,7 @@ export async function handleCompras({
 
         semana:
           obtenerSemanaCompras(
-            fecha
+            fechaCaptura
           ),
 
         area:
@@ -1205,20 +1353,5 @@ export async function handleCompras({
 
     }catch(e){
 
-      console.error(e)
-
-      await sock.sendMessage(
-        jid,
-        {
-          text:
-            '❌ Error al registrar compra: ' +
-            e.message
-        }
-      )
-
-      return true
-    }
-  }
-
-  return false
-}
+      console.error
+```
