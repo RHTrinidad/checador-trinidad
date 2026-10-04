@@ -49,6 +49,7 @@ async function obtenerConceptosCatalogo(){
       if(!concepto) continue
 
       conceptos.push(concepto)
+
     }
 
     return conceptos
@@ -794,7 +795,17 @@ async function registrarCompra(
     INSUMOS
     ==========================================================
 
-    Se conserva la lógica existente.
+    Columnas:
+
+    A # Comprobante
+    B Productos
+    C Cantidad
+    D Unidad
+    E Precio Unitario
+    F Costo Final
+    G Proveedor
+    H Sucursal
+    I Fecha
 
     La fecha utilizada es Fecha de Captura,
     ya que es cuando el bot registra el insumo.
@@ -827,6 +838,8 @@ async function registrarCompra(
           p.total ||
             datos.monto,
 
+          proveedorFinal,
+
           datos.sucursal,
 
           datos.fechaCaptura
@@ -839,7 +852,7 @@ async function registrarCompra(
           SPREADSHEET_COMPRAS_ID,
 
         range:
-          `${SHEET_INSUMOS}!A:H`,
+          `${SHEET_INSUMOS}!A:I`,
 
         valueInputOption:
           'USER_ENTERED',
@@ -857,7 +870,7 @@ async function registrarCompra(
           SPREADSHEET_COMPRAS_ID,
 
         range:
-          `${SHEET_INSUMOS}!A:H`,
+          `${SHEET_INSUMOS}!A:I`,
 
         valueInputOption:
           'USER_ENTERED',
@@ -876,6 +889,8 @@ async function registrarCompra(
             datos.monto,
 
             datos.monto,
+
+            proveedorFinal,
 
             datos.sucursal,
 
@@ -1184,7 +1199,7 @@ export async function handleCompras({
     ==========================================================
     RESTRICCIÓN ACTUAL
     ==========================================================
-
+    
     Por ahora SOLO el grupo de pruebas puede
     registrar compras mediante fotografías.
 
