@@ -6,7 +6,7 @@ import cron from 'node-cron'
 import {getTipoGrupo,GRUPO_COYOACAN_ID,GRUPO_BUCARELI_ID} from './src/config.js'
 import {handleChecador,registrarDescansos,cerrarSalidasPendientes,checkNoLlegaron} from './src/checador.js'
 import {handleReportes} from './src/reportes.js'
-import {handleCompras} from './src/compras.js'
+import {handleCompras} from './src/compras/compras.js'
 
 const AUTH_DIR='/app/auth'
 
