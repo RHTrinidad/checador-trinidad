@@ -310,11 +310,20 @@ export async function handleChecador({
       return
     }
 
-   await responder(
-  sock,
-  jid,
-  `✅ Salida - ${nombre} en ${sucursal} - ${hora}`
-)
+    await registrarSalida({
+      fecha,
+      hora:ahora,
+      telefono:telefono10,
+      nombre,
+      sucursal:cercana.nombre,
+      distancia:dMin,
+      programada:horaSalida,
+      jornadaEntrada:horaEntrada,
+      horario,
+      emp,
+      sock,
+      jid
+    })
 
   }catch(e){
     console.error('Error en handleChecador:',e)
@@ -583,15 +592,7 @@ async function registrarSalida({
     await responder(
       sock,
       jid,
-      `✅ *SALIDA REGISTRADA*\n\n`+
-      `👤 ${nombre}\n`+
-      `🕐 Entrada: ${horaEntrada}\n`+
-      `🕐 Salida: ${hora}\n`+
-      `📍 ${sucursal} - ${Math.round(distancia)} m\n`+
-      `⏱️ Horas: ${horas}`+
-      (extra.extra&&extra.extra!=='0'
-        ?`\n➕ Extra: ${extra.extra}`
-        :'')
+      `✅ Salida - ${nombre} en ${sucursal} - ${hora}`
     )
 
     return true
