@@ -7,6 +7,7 @@ import {getTipoGrupo,GRUPO_COYOACAN_ID,GRUPO_BUCARELI_ID} from './src/config.js'
 import {handleChecador,registrarDescansos,cerrarSalidasPendientes,checkNoLlegaron} from './src/checador.js'
 import {handleReportes} from './src/reportes.js'
 import {handleCompras} from './src/compras/compras.js'
+import {handlePagos} from './src/compras/pagos.js'
 
 const AUTH_DIR='/app/auth'
 
@@ -186,6 +187,21 @@ async function conectar(){
             }
 
             continue
+          }
+
+          if(
+            (tipoGrupo==='REPORTES'||tipoGrupo==='GERENTES')&&
+            esImagen
+          ){
+            const esPago=await handlePagos({
+              sock,
+              jid,
+              m,
+              texto,
+              esImagen
+            })
+
+            if(esPago)continue
           }
 
           if(
