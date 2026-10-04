@@ -32,7 +32,9 @@ async function agregarFotoACola({sock,jid,m,texto}){
       logger:P({level:'fatal'}),
       reuploadRequest:sock.updateMediaMessage
     })
+
     limpiarHashesRecientes()
+
     const hash=hashBuffer(buffer)
 
     if(hashesRecientes.has(hash)){
@@ -63,9 +65,11 @@ async function agregarFotoACola({sock,jid,m,texto}){
     return true
   }catch(e){
     console.error('Error agregando foto a cola:',e)
+
     await sock.sendMessage(jid,{
       text:'❌ No pude recibir correctamente la fotografía.'
     })
+
     return true
   }
 }
@@ -112,11 +116,7 @@ async function registrarDocumentosIA(jid,sock,datosIA,tipoEntrada){
     const detalleCompras=[]
 
     for(const documento of datosIA){
-      if(
-        !documento||
-        documento.importe_total==='0'||
-        !documento.importe_total
-      )continue
+      if(!documento||documento.importe_total==='0'||!documento.importe_total)continue
 
       const datosFinal={
         folio:documento.folio||'',
@@ -160,11 +160,12 @@ async function registrarDocumentosIA(jid,sock,datosIA,tipoEntrada){
         :`✅ ${registros} compras registradas correctamente.`
 
     for(const compra of detalleCompras){
-      const monto=parseFloat(
-        (compra.monto||'0')
-          .toString()
-          .replace(/,/g,'')
-      )||0
+      const monto=
+        parseFloat(
+          (compra.monto||'0')
+            .toString()
+            .replace(/,/g,'')
+        )||0
 
       mensaje+=
         `\n${registros>1?'• ':''}${compra.proveedor} · $${monto.toFixed(2)}`
@@ -245,18 +246,11 @@ function obtenerSemanaCompras(fecha){
   if(Number.isNaN(d.getTime()))return''
 
   const anio=d.getFullYear()
+  const inicioAnio=new Date(anio,0,1,12)
+  const diaSemana=inicioAnio.getDay()
+  const diasDesdeMartes=(diaSemana-2+7)%7
 
-  const inicioAnio=
-    new Date(anio,0,1,12)
-
-  const diaSemana=
-    inicioAnio.getDay()
-
-  const diasDesdeMartes=
-    (diaSemana-2+7)%7
-
-  const inicioSemana01=
-    new Date(inicioAnio)
+  const inicioSemana01=new Date(inicioAnio)
 
   inicioSemana01.setDate(
     inicioSemana01.getDate()-diasDesdeMartes
@@ -281,29 +275,23 @@ async function buscarProveedorCatalogo(nombre){
     )
 
     const buscado=
-      normaliza(nombre||'')
-        .toUpperCase()
-        .trim()
+      normaliza(nombre||'').toUpperCase().trim()
 
     if(!buscado)return'PROVEEDOR OCASIONAL'
 
     for(const row of rows){
-      const oficial=
-        (row[0]||'').toString().trim()
+      const oficial=(row[0]||'').toString().trim()
 
       if(!oficial)continue
 
       const normalizado=
-        normaliza(oficial)
-          .toUpperCase()
+        normaliza(oficial).toUpperCase()
 
       if(
         normalizado===buscado||
         normalizado.includes(buscado)||
         buscado.includes(normalizado)
-      ){
-        return oficial
-      }
+      )return oficial
     }
 
     return'PROVEEDOR OCASIONAL'
@@ -325,9 +313,7 @@ async function leerTicketsConOpenAI(buffers){
     const listaConceptos=
       conceptosValidos.length>0
         ?conceptosValidos.join(', ')
-        :'(
-NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J
-)'
+        :'(NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J)'
 
     const contenido=[{
       type:'text',
@@ -484,8 +470,7 @@ Si una factura ocupa 4 fotografías:
 
     if(!match)return null
 
-    const json=
-      JSON.parse(match[0])
+    const json=JSON.parse(match[0])
 
     const documentos=
       Array.isArray(json.documentos)
@@ -545,9 +530,7 @@ async function leerPDFConOpenAI(
     const listaConceptos=
       conceptosValidos.length>0
         ?conceptosValidos.join(', ')
-        :'(
-NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J
-)'
+        :'(NO HAY CONCEPTOS CONFIGURADOS EN LA COLUMNA J)'
 
     const prompt=`Eres lector de comprobantes de compras para restaurante Trinidad.
 
@@ -714,9 +697,7 @@ Si el PDF tiene 4 páginas de UNA factura:
           if(
             c.type==='output_text'&&
             c.text
-          ){
-            textos.push(c.text)
-          }
+          )textos.push(c.text)
         }
       }
 
@@ -959,9 +940,7 @@ async function buscarDuplicado(
   }
 }
 
-async function marcarFilaDuplicada(
-  rowNumber
-){
+async function marcarFilaDuplicada(rowNumber){
   try{
     const sClient=
       await sheetsClient()
@@ -1238,6 +1217,7 @@ export async function generarExcelCompras(
     )
 
   ws.addRow([])
+
   ws.addRow([
     'TOTAL',
     '',
@@ -1359,6 +1339,7 @@ export async function handleCompras({
           text:
             '❌ Falta OPENAI_API_KEY en Railway'
         })
+
         return true
       }
 
