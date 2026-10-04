@@ -1,0 +1,12 @@
+src/compras/pagos.js
+
+├── configuración
+├── recibir comprobante
+├── descargar imagen
+├── OpenAI
+├── identificar PAGO
+├── extraer datos
+├── fecha de captura
+├── registrar en Google Sheets
+├── detectar duplicado
+└── pintar duplicado amarillo
