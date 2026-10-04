@@ -1,6 +1,6 @@
 import{downloadMediaMessage}from'@whiskeysockets/baileys'
 import P from'pino'
-import{SPREADSHEET_COMPRAS_ID,SHEET_RESUMEN,SHEET_INSUMOS,GRUPO_PRUEBAS_ID}from'../config.js'
+import{SPREADSHEET_COMPRAS_ID,SHEET_RESUMEN,SHEET_INSUMOS,GRUPO_PRUEBAS_ID,GRUPO_COMPRAS_ID}from'../config.js'
 import{fechaLaboral,normaliza}from'../utils.js'
 import{sheetsClient,getRows}from'../sheets.js'
 import ExcelJS from'exceljs'
@@ -1306,7 +1306,8 @@ export async function handleCompras({
 
   if(
     (esImagen||esPDF)&&
-    jid!==GRUPO_PRUEBAS_ID
+    jid!==GRUPO_PRUEBAS_ID&&
+    jid!==GRUPO_COMPRAS_ID
   )return false
 
   if(esPDF){
