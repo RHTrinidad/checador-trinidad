@@ -1,13 +1,13 @@
-import makeWASocket,{useMultiFileAuthState,DisconnectReason,fetchLatestBaileysVersion}from '@whiskeysockets/baileys'
-import pino from 'pino'
-import qrcode from 'qrcode-terminal'
-import cron from 'node-cron'
+import makeWASocket,{useMultiFileAuthState,DisconnectReason,fetchLatestBaileysVersion}from'@whiskeysockets/baileys'
+import pino from'pino'
+import qrcode from'qrcode-terminal'
+import cron from'node-cron'
 
-import {getTipoGrupo,GRUPO_COYOACAN_ID,GRUPO_BUCARELI_ID}from './src/config.js'
-import {handleChecador,registrarDescansos,cerrarSalidasPendientes,checkNoLlegaron}from './src/checador.js'
-import {handleReportes}from './src/reportes.js'
-import {handleCompras}from './src/compras/compras.js'
-import {handlePagos}from './src/compras/pagos.js'
+import {getTipoGrupo,GRUPO_COYOACAN_ID,GRUPO_BUCARELI_ID}from'./src/config.js'
+import {handleChecador,registrarDescansos,cerrarSalidasPendientes,checkNoLlegaron}from'./src/checador.js'
+import {handleReportes}from'./src/reportes.js'
+import {handleCompras}from'./src/compras/compras.js'
+import {handlePagos}from'./src/compras/pagos.js'
 
 const AUTH_DIR='/app/auth'
 const COMANDOS_REPORTES=/^(reportes|info|datos|cuenta bancaria|cuenta empleado|datos bancarios|cuenta|banco|clave|clabe|asistencia hoy|resumen|reporte|compras\b|faltas|retardos|críticos|criticos|graves|excel|reporte semanal|reporte mensual)\b/i
@@ -155,6 +155,25 @@ async function conectar(){
               esPDF,
               reenviado:!!m.message?.documentWithCaptionMessage
             })
+          }
+
+          /*
+            GRUPOS NUEVOS
+            Solo responden al comando exacto "id".
+          */
+
+          if(
+            jid.endsWith('@g.us')&&
+            !tipoGrupo
+          ){
+
+            if(texto.toLowerCase()==='id'){
+              await sock.sendMessage(jid,{
+                text:`🆔 ID DE ESTE GRUPO:\n${jid}`
+              })
+            }
+
+            continue
           }
 
           /*
