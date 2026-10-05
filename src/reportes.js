@@ -1058,7 +1058,7 @@ async function generarImagenJornada(
     )
 
   // ---------------------------------------------------
-  // SI NO HAY RESULTADOS
+  // SIN RESULTADOS
   // ---------------------------------------------------
 
   if(!datos.length){
@@ -1072,19 +1072,121 @@ async function generarImagenJornada(
   }
 
   // ---------------------------------------------------
-  // CARGAR FUENTE LOCAL
+  // CARGAR FUENTE
   // ---------------------------------------------------
-  // La fuente viene de @fontsource/dejavu.
-  // No dependemos de fuentes instaladas en Railway.
+  // Buscamos automáticamente una fuente compatible
+  // dentro de @fontsource/dejavu.
+  //
+  // Esto evita depender de una ruta exacta y evita
+  // Fontconfig de Railway.
   // ---------------------------------------------------
 
-  const fontPath=path.join(
-    process.cwd(),
-    'node_modules',
-    '@fontsource',
-    'dejavu',
-    'files',
-    'dejavu-sans-latin-400-normal.woff'
+  function buscarFuente(dir){
+
+    if(!fs.existsSync(dir)){
+      return null
+    }
+
+    const encontrados=[]
+
+    function recorrer(actual){
+
+      let items=[]
+
+      try{
+        items=fs.readdirSync(
+          actual,
+          {
+            withFileTypes:true
+          }
+        )
+      }catch{
+        return
+      }
+
+      for(const item of items){
+
+        const full=
+          path.join(
+            actual,
+            item.name
+          )
+
+        if(item.isDirectory()){
+
+          recorrer(full)
+
+          continue
+        }
+
+        const nombre=
+          item.name.toLowerCase()
+
+        if(
+          nombre.endsWith('.ttf')||
+          nombre.endsWith('.otf')||
+          nombre.endsWith('.woff')
+        ){
+
+          encontrados.push(full)
+        }
+      }
+    }
+
+    recorrer(dir)
+
+    if(!encontrados.length){
+      return null
+    }
+
+    // Preferimos TTF
+    const ttf=
+      encontrados.find(x=>
+        x.toLowerCase().endsWith('.ttf')
+      )
+
+    if(ttf)return ttf
+
+    // Después OTF
+    const otf=
+      encontrados.find(x=>
+        x.toLowerCase().endsWith('.otf')
+      )
+
+    if(otf)return otf
+
+    // Finalmente WOFF
+    return encontrados.find(x=>
+      x.toLowerCase().endsWith('.woff')
+    )||null
+  }
+
+  const fontDir=
+    path.join(
+      process.cwd(),
+      'node_modules',
+      '@fontsource',
+      'dejavu'
+    )
+
+  const fontPath=
+    buscarFuente(fontDir)
+
+  if(!fontPath){
+
+    console.error(
+      'NO SE ENCONTRO FUENTE EN:',
+      fontDir
+    )
+
+    throw new Error(
+      'No se encontró una fuente compatible en @fontsource/dejavu'
+    )
+  }
+
+  console.log(
+    'FUENTE JORNADA:',
+    fontPath
   )
 
   let font
@@ -1104,12 +1206,96 @@ async function generarImagenJornada(
     )
 
     throw new Error(
-      `No se pudo cargar la fuente de jornada: ${fontPath}`
+      `No se pudo cargar la fuente: ${fontPath}`
     )
   }
 
   // ---------------------------------------------------
-  // DIAS
+  // FUNCIÓN SEGURA PARA GENERAR TEXTO
+  // ---------------------------------------------------
+
+  function pathTexto(
+    texto,
+    x,
+    y,
+    size,
+    fill='#111111',
+    anchor='start'
+  ){
+
+    const s=
+      String(texto??'')
+        .replace(/\r/g,'')
+        .replace(/\n/g,' ')
+
+    if(!s){
+      return ''
+    }
+
+    let xReal=x
+
+    try{
+
+      const ancho=
+        font.getAdvanceWidth(
+          s,
+          size,
+          {
+            kerning:true
+          }
+        )
+
+      if(anchor==='middle'){
+
+        xReal=
+          x-
+          ancho/2
+
+      }else if(anchor==='end'){
+
+        xReal=
+          x-
+          ancho
+      }
+
+      const glyphPath=
+        font.getPath(
+          s,
+          xReal,
+          y,
+          size,
+          {
+            kerning:true
+          }
+        )
+
+      const d=
+        glyphPath.toPathData(3)
+
+      if(!d){
+        return ''
+      }
+
+      return `
+<path
+  d="${d}"
+  fill="${fill}"
+/>`
+
+    }catch(error){
+
+      console.error(
+        'ERROR GENERANDO TEXTO COMO PATH:',
+        s,
+        error
+      )
+
+      return ''
+    }
+  }
+
+  // ---------------------------------------------------
+  // DIMENSIONES
   // ---------------------------------------------------
 
   const dias=[
@@ -1121,10 +1307,6 @@ async function generarImagenJornada(
     ['SAB',170],
     ['DOM',170]
   ]
-
-  // ---------------------------------------------------
-  // SOLO NOMBRE + LUNES A DOMINGO
-  // ---------------------------------------------------
 
   const anchoEmpleado=320
   const anchoDia=170
@@ -1151,6 +1333,10 @@ async function generarImagenJornada(
   const rects=[]
   const textos=[]
 
+  // ---------------------------------------------------
+  // FONDO
+  // ---------------------------------------------------
+
   rects.push(
     `<rect x="0" y="0" width="${ancho}" height="${alto}" fill="#ffffff"/>`
   )
@@ -1160,8 +1346,7 @@ async function generarImagenJornada(
   // ---------------------------------------------------
 
   textos.push(
-    textoComoPath(
-      font,
+    pathTexto(
       'JORNADA SEMANAL',
       margen,
       55,
@@ -1172,8 +1357,7 @@ async function generarImagenJornada(
   )
 
   textos.push(
-    textoComoPath(
-      font,
+    pathTexto(
       textoTituloJornada(
         sucursalFiltro,
         areaFiltro,
@@ -1188,8 +1372,7 @@ async function generarImagenJornada(
   )
 
   textos.push(
-    textoComoPath(
-      font,
+    pathTexto(
       fechaLaboral(),
       ancho-margen,
       55,
@@ -1198,6 +1381,10 @@ async function generarImagenJornada(
       'end'
     )
   )
+
+  // ---------------------------------------------------
+  // CABECERA
+  // ---------------------------------------------------
 
   const yHeader=115
   const x0=margen
@@ -1215,12 +1402,19 @@ async function generarImagenJornada(
   ){
 
     rects.push(
-      `<rect x="${x}" y="${yHeader}" width="${w}" height="${altoFila}" fill="#eeeeee" stroke="#cccccc"/>`
+      `<rect
+        x="${x}"
+        y="${yHeader}"
+        width="${w}"
+        height="${altoFila}"
+        fill="#eeeeee"
+        stroke="#cccccc"
+        stroke-width="1"
+      />`
     )
 
     textos.push(
-      textoComoPath(
-        font,
+      pathTexto(
         titulo,
         x+w/2,
         yHeader+35,
@@ -1232,6 +1426,10 @@ async function generarImagenJornada(
 
     x+=w
   }
+
+  // ---------------------------------------------------
+  // FILAS
+  // ---------------------------------------------------
 
   let y=
     yHeader+
@@ -1261,17 +1459,26 @@ async function generarImagenJornada(
       i++
     ){
 
-      const w=columnas[i][1]
+      const w=
+        columnas[i][1]
 
       rects.push(
-        `<rect x="${x}" y="${y}" width="${w}" height="${altoFila}" fill="#ffffff" stroke="#dddddd"/>`
+        `<rect
+          x="${x}"
+          y="${y}"
+          width="${w}"
+          height="${altoFila}"
+          fill="#ffffff"
+          stroke="#dddddd"
+          stroke-width="1"
+        />`
       )
 
-      const valor=valores[i]
+      const valor=
+        valores[i]
 
       textos.push(
-        textoComoPath(
-          font,
+        pathTexto(
           valor,
           x+w/2,
           y+35,
@@ -1287,11 +1494,24 @@ async function generarImagenJornada(
     y+=altoFila
   }
 
+  // ---------------------------------------------------
+  // SVG
+  // ---------------------------------------------------
+
   const svg=
-`<svg xmlns="http://www.w3.org/2000/svg" width="${ancho}" height="${alto}" viewBox="0 0 ${ancho} ${alto}">
+`<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="${ancho}"
+  height="${alto}"
+  viewBox="0 0 ${ancho} ${alto}"
+>
 ${rects.join('\n')}
 ${textos.join('\n')}
 </svg>`
+
+  // ---------------------------------------------------
+  // PNG
+  // ---------------------------------------------------
 
   const buffer=
     await sharp(
@@ -1299,6 +1519,10 @@ ${textos.join('\n')}
     )
       .png()
       .toBuffer()
+
+  // ---------------------------------------------------
+  // NOMBRE DEL ARCHIVO
+  // ---------------------------------------------------
 
   const sufijoSucursal=
     sucursalFiltro
@@ -1317,7 +1541,12 @@ ${textos.join('\n')}
 
   const sufijoEmpleado=
     empleadoFiltro
-      ?`_${normaliza(empleadoFiltro).replace(/\s+/g,'_')}`
+      ?`_${normaliza(
+        empleadoFiltro
+      ).replace(
+        /\s+/g,
+        '_'
+      )}`
       :''
 
   const fileName=
@@ -1329,6 +1558,10 @@ ${textos.join('\n')}
       areaFiltro,
       empleadoFiltro
     )
+
+  // ---------------------------------------------------
+  // ENVIAR
+  // ---------------------------------------------------
 
   await sock.sendMessage(
     jid,
@@ -1342,57 +1575,6 @@ ${titulo}`
     }
   )
 }
-
-export async function jornadaSemanal(
-  filtroGrupo,
-  jid,
-  sock,
-  sucursalFiltro='',
-  areaFiltro='',
-  empleadoFiltro=''
-){
-
-  const base=
-    await getRows(
-      'Horario_Base!A2:K'
-    )
-
-  if(!base.length){
-
-    await sock.sendMessage(jid,{
-      text:
-        'No hay información disponible en Horario_Base.'
-    })
-
-    return
-  }
-
-  try{
-
-    await generarImagenJornada(
-      base,
-      filtroGrupo,
-      jid,
-      sock,
-      sucursalFiltro,
-      areaFiltro,
-      empleadoFiltro
-    )
-
-  }catch(error){
-
-    console.error(
-      'ERROR GENERANDO JORNADA SEMANAL:',
-      error
-    )
-
-    await sock.sendMessage(jid,{
-      text:
-        'No fue posible generar la imagen de la jornada semanal. Revisa que la dependencia de imagen esté instalada.'
-    })
-  }
-}
-
 // =====================================================
 // BUSCAR EMPLEADO
 // =====================================================
