@@ -30,6 +30,7 @@ const TIEMPO_ANTI_DUPLICADO=8000
 const checajesRecientes=new Map()
 
 let ultimoRegistroDescansos=''
+let registrandoDescansos=false
 
 function esDescanso(v){
   return (v||'').toString().trim().toLowerCase().includes('descanso')
@@ -500,9 +501,9 @@ async function registrarSalida({
         .slice(-10)
 
       if(
-        fechaRow===fecha &&
-        telRow===telefono &&
-        (r[3]||'').toString().trim() &&
+        fechaRow===fecha&&
+        telRow===telefono&&
+        (r[3]||'').toString().trim()&&
         !(r[5]||'').toString().trim()
       ){
         filaEntrada=r
@@ -603,13 +604,41 @@ export async function registrarDescansos(){
   const fecha=fechaLaboral()
 
   if(ultimoRegistroDescansos===fecha)return
+  if(registrandoDescansos)return
+
+  registrandoDescansos=true
 
   try{
     const rows=await getRows('Horario_Base!A2:K')
+    const asistenciaRows=await getRows('Asistencia!A:M')
     const dia=diaMexico()
 
     const client=await sheetsClient()
     const valores=[]
+
+    const descansosRegistrados=new Set()
+
+    for(let i=1;i<asistenciaRows.length;i++){
+      const r=asistenciaRows[i]
+
+      const fechaRow=(r[2]||'').toString().trim()
+      const telefonoRow=(r[0]||'')
+        .toString()
+        .replace(/\D/g,'')
+        .slice(-10)
+
+      const estadoRow=(r[4]||'').toString().trim()
+
+      if(
+        fechaRow===fecha&&
+        telefonoRow&&
+        estadoRow.toUpperCase()==='DESCANSO'
+      ){
+        descansosRegistrados.add(
+          `${telefonoRow}|${fecha}`
+        )
+      }
+    }
 
     for(const r of rows){
       const telefono=(r[0]||'')
@@ -627,6 +656,12 @@ export async function registrarDescansos(){
         !esDescanso(horario)
       )continue
 
+      const clave=`${telefono}|${fecha}`
+
+      if(descansosRegistrados.has(clave)){
+        continue
+      }
+
       valores.push([
         telefono,
         nombre,
@@ -642,6 +677,8 @@ export async function registrarDescansos(){
         '',
         horario
       ])
+
+      descansosRegistrados.add(clave)
     }
 
     if(valores.length){
@@ -654,11 +691,21 @@ export async function registrarDescansos(){
           values:valores
         }
       })
+
+      console.log(
+        `🏖️ Descansos registrados: ${valores.length}`
+      )
+    }else{
+      console.log(
+        `🏖️ No hay descansos nuevos para ${fecha}`
+      )
     }
 
     ultimoRegistroDescansos=fecha
   }catch(e){
     console.error('Error registrando descansos:',e)
+  }finally{
+    registrandoDescansos=false
   }
 }
 
@@ -809,8 +856,8 @@ export async function checkNoLlegaron(sock){
           .toString()
           .trim()
 
-        return fechaRow===fecha &&
-          telRow===telefono &&
+        return fechaRow===fecha&&
+          telRow===telefono&&
           !!horaEntrada
       })
 
