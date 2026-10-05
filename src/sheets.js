@@ -143,7 +143,8 @@ export async function getHorarioBaseMap(){
         horas,
         nombreOriginal:f[1],
         tel,
-        sucursal:f[2]||''
+        sucursal:f[2]||'',
+        area:f[10]||''
       }
 
       if(tel)map[tel]=obj
