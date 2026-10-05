@@ -36,6 +36,29 @@ function esDescanso(v){
   return (v||'').toString().trim().toLowerCase().includes('descanso')
 }
 
+function esVacaciones(v){
+  return (v||'').toString().trim().toLowerCase().includes('vacacion')
+}
+
+function esFaltaJustificada(v){
+  const texto=(v||'').toString().trim().toLowerCase()
+
+  return texto.includes('falta justificada')||
+    texto.includes('falta justific')
+}
+
+function tipoIncidenciaHorario(v){
+  if(esDescanso(v))return 'DESCANSO'
+  if(esVacaciones(v))return 'VACACIONES'
+  if(esFaltaJustificada(v))return 'FALTA JUSTIFICADA'
+
+  return ''
+}
+
+function esIncidenciaHorario(v){
+  return !!tipoIncidenciaHorario(v)
+}
+
 function diaMexico(){
   return new Date(
     new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})
@@ -246,7 +269,23 @@ export async function handleChecador({
       ?horarioDelDia(horarioEmp,dia)
       :''
 
-    const descanso=esDescanso(horario)
+    const tipoIncidencia=tipoIncidenciaHorario(horario)
+
+    if(tipoIncidencia){
+      const mensajes={
+        'DESCANSO':`🏖️ *${nombre}*\n\nHoy tienes descanso según tu horario.`,
+        'VACACIONES':`🏝️ *${nombre}*\n\nHoy tienes vacaciones según tu horario.`,
+        'FALTA JUSTIFICADA':`📋 *${nombre}*\n\nHoy tienes falta justificada según tu horario.`
+      }
+
+      await responder(
+        sock,
+        jid,
+        mensajes[tipoIncidencia]||`📋 *${nombre}*\n\nHoy no tienes jornada de trabajo registrada.`
+      )
+
+      return
+    }
 
     const partes=horario.match(
       /(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/
@@ -264,15 +303,6 @@ export async function handleChecador({
       telefono10,
       fecha
     )
-
-    if(descanso){
-      await responder(
-        sock,
-        jid,
-        `🏖️ *${nombre}*\n\nHoy tienes descanso según tu horario.`
-      )
-      return
-    }
 
     if(tipoRegistro==='COMPLETO'){
       await responder(
@@ -374,6 +404,16 @@ async function determinarTipoRegistro(tel,fecha){
         .slice(-10)
 
       if(fechaRow!==fecha||telRow!==tel)continue
+
+      const estado=(r[4]||'').toString().trim().toUpperCase()
+
+      if(
+        estado==='DESCANSO'||
+        estado==='VACACIONES'||
+        estado==='FALTA JUSTIFICADA'
+      ){
+        continue
+      }
 
       if((r[3]||'').toString().trim()){
         entrada=true
@@ -616,7 +656,7 @@ export async function registrarDescansos(){
     const client=await sheetsClient()
     const valores=[]
 
-    const descansosRegistrados=new Set()
+    const incidenciasRegistradas=new Set()
 
     for(let i=1;i<asistenciaRows.length;i++){
       const r=asistenciaRows[i]
@@ -627,15 +667,19 @@ export async function registrarDescansos(){
         .replace(/\D/g,'')
         .slice(-10)
 
-      const estadoRow=(r[4]||'').toString().trim()
+      const estadoRow=(r[4]||'').toString().trim().toUpperCase()
 
       if(
         fechaRow===fecha&&
         telefonoRow&&
-        estadoRow.toUpperCase()==='DESCANSO'
+        (
+          estadoRow==='DESCANSO'||
+          estadoRow==='VACACIONES'||
+          estadoRow==='FALTA JUSTIFICADA'
+        )
       ){
-        descansosRegistrados.add(
-          `${telefonoRow}|${fecha}`
+        incidenciasRegistradas.add(
+          `${telefonoRow}|${fecha}|${estadoRow}`
         )
       }
     }
@@ -649,16 +693,17 @@ export async function registrarDescansos(){
       const nombre=(r[1]||'').toString().trim()
       const sucursal=(r[2]||'').toString().trim()
       const horario=horarioDelDia(r,dia)
+      const tipoIncidencia=tipoIncidenciaHorario(horario)
 
       if(
         !telefono||
         !nombre||
-        !esDescanso(horario)
+        !tipoIncidencia
       )continue
 
-      const clave=`${telefono}|${fecha}`
+      const clave=`${telefono}|${fecha}|${tipoIncidencia}`
 
-      if(descansosRegistrados.has(clave)){
+      if(incidenciasRegistradas.has(clave)){
         continue
       }
 
@@ -667,7 +712,7 @@ export async function registrarDescansos(){
         nombre,
         fecha,
         '',
-        'DESCANSO',
+        tipoIncidencia,
         '',
         sucursal,
         '',
@@ -678,7 +723,7 @@ export async function registrarDescansos(){
         horario
       ])
 
-      descansosRegistrados.add(clave)
+      incidenciasRegistradas.add(clave)
     }
 
     if(valores.length){
@@ -693,17 +738,17 @@ export async function registrarDescansos(){
       })
 
       console.log(
-        `🏖️ Descansos registrados: ${valores.length}`
+        `🏖️ Incidencias registradas: ${valores.length}`
       )
     }else{
       console.log(
-        `🏖️ No hay descansos nuevos para ${fecha}`
+        `🏖️ No hay incidencias nuevas para ${fecha}`
       )
     }
 
     ultimoRegistroDescansos=fecha
   }catch(e){
-    console.error('Error registrando descansos:',e)
+    console.error('Error registrando descansos/incidencias:',e)
   }finally{
     registrandoDescansos=false
   }
@@ -724,7 +769,13 @@ export async function cerrarSalidasPendientes(){
       const estado=(r[4]||'').toString().trim().toUpperCase()
 
       if(fechaRow!==fecha||!horaEntrada)continue
-      if(salida||estado==='DESCANSO')continue
+
+      if(
+        salida||
+        estado==='DESCANSO'||
+        estado==='VACACIONES'||
+        estado==='FALTA JUSTIFICADA'
+      )continue
 
       const telefono=(r[0]||'')
         .toString()
@@ -831,7 +882,7 @@ export async function checkNoLlegaron(sock){
         !telefono||
         !nombre||
         !horario||
-        esDescanso(horario)
+        esIncidenciaHorario(horario)
       )continue
 
       const partes=horario.match(
