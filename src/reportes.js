@@ -101,6 +101,11 @@ const CATALOGO_REPORTES=[
     grupos:['REPORTES']
   },
   {
+    comando:'jornada semanal',
+    descripcion:'Jornada semanal por sucursal en imagen',
+    grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
+  },
+  {
     comando:'excel',
     descripcion:'Generar reporte en Excel',
     grupos:['REPORTES']
@@ -119,7 +124,7 @@ function grupoActual(filtroGrupo){
     return 'GERENTES_COYOACAN'
   }
 
-  if(f==='bucareli'||f==='juarez'){
+  if(f==='bucareli'){
     return 'GERENTES_BUCARELI'
   }
 
@@ -187,6 +192,7 @@ function textoListaReportes(filtroGrupo){
     if(
       r.comando.startsWith('reporte semanal')||
       r.comando.startsWith('reporte mensual')||
+      r.comando.startsWith('jornada semanal')||
       r.comando.startsWith('excel')
     ){
       generales.push(r)
@@ -201,7 +207,7 @@ function textoListaReportes(filtroGrupo){
   let txt='📋 *LISTA DE REPORTES*'
 
   if(grupo==='GERENTES_COYOACAN'){
-    txt+='\n📍 Coyoacán'
+    txt+='\n📍 Coyoacán / Hotel'
   }else if(grupo==='GERENTES_BUCARELI'){
     txt+='\n📍 Bucareli'
   }else{
@@ -326,18 +332,23 @@ function formatoHoras(min){
 function sucursalCoincideAsignada(suc,filtro){
   const x=normaliza(suc)
   const f=normaliza(filtro)
+
   if(!f)return true
+
   if(f==='coyoacan'||f==='coyoacan hotel'||f==='hotel'){
     return x.includes('coyo')||x.includes('hotel')||x.includes('trinidad')
   }
-  if(f==='bucareli'||f==='juarez'){
-    return x.includes('bucareli')||x.includes('juarez')
+
+  if(f==='bucareli'){
+    return x.includes('bucareli')
   }
+
   return x.includes(f)
 }
 
 async function cargarDatos(){
   const sClient=await sheetsClient()
+
   const [asis,emp,base]=await Promise.all([
     sClient.spreadsheets.values.get({
       spreadsheetId:SPREADSHEET_ID,
@@ -346,6 +357,7 @@ async function cargarDatos(){
     getRows('Empleados!A:T'),
     getRows('Horario_Base!A2:K')
   ])
+
   return {
     sClient,
     asis:asis.data.values||[],
@@ -356,22 +368,25 @@ async function cargarDatos(){
 
 function mapaEmpleados(empRows){
   const map={}
+
   for(const r of empRows){
     const tel=tel10(r[0])
     if(tel)map[tel]=r
   }
+
   return map
 }
 
 function mapaBase(baseRows){
   const map={}
+
   for(const r of baseRows){
     const tel=tel10(r[0])
     if(tel)map[tel]=r
   }
+
   return map
 }
-
 
 // =====================================================
 // ASISTENCIA DE HOY
@@ -398,6 +413,7 @@ export async function asistenciaHoy(filtroSucursal,jid,sock){
   for(const r of base){
 
     const sucBase=(r[2]||'').toString()
+
     if(!sucursalCoincideAsignada(sucBase,filtroSucursal))continue
 
     const nombre=r[1]||''
@@ -419,6 +435,7 @@ export async function asistenciaHoy(filtroSucursal,jid,sock){
     if(!parsed)continue
 
     if(parsed.entrada==='LIBRE'){
+
       const registro=asis.find(a=>
         tel10(a[0])===tel &&
         a[2]===fLab &&
@@ -501,6 +518,297 @@ ${descanso.join('\n')||'-'}`
   await sock.sendMessage(jid,{text:txt})
 }
 
+// =====================================================
+// JORNADA SEMANAL - IMAGEN
+// =====================================================
+
+function escaparSvg(v){
+  return String(v??'')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&apos;')
+}
+
+function abreviarHorario(v){
+  const s=String(v||'').trim()
+
+  if(!s)return '-'
+
+  if(normaliza(s)==='descanso')return 'DESCANSO'
+
+  if(normaliza(s)==='libre')return 'LIBRE'
+
+  return s
+}
+
+function filtroJornada(filtroGrupo){
+  const f=normaliza(filtroGrupo)
+
+  if(f==='bucareli'){
+    return ['bucareli']
+  }
+
+  if(
+    f==='coyoacan'||
+    f==='coyoacan hotel'||
+    f==='hotel'
+  ){
+    return ['coyoacan','hotel']
+  }
+
+  return ['coyoacan','hotel','bucareli']
+}
+
+function jornadaCoincideSucursal(sucursal,sucursales){
+  const x=normaliza(sucursal)
+
+  if(!x)return false
+
+  return sucursales.some(s=>{
+    const f=normaliza(s)
+
+    if(f==='coyoacan'){
+      return x.includes('coyo')||x.includes('trinidad')
+    }
+
+    if(f==='hotel'){
+      return x.includes('hotel')
+    }
+
+    if(f==='bucareli'){
+      return x.includes('bucareli')
+    }
+
+    return x.includes(f)
+  })
+}
+
+function anchoTextoSvg(texto,max){
+  const s=String(texto||'')
+
+  if(s.length<=max)return s
+
+  return `${s.slice(0,Math.max(1,max-1))}…`
+}
+
+async function generarImagenJornada(
+  filas,
+  filtroGrupo,
+  jid,
+  sock
+){
+
+  const {default:sharp}=await import('sharp')
+
+  const sucursales=filtroJornada(filtroGrupo)
+
+  const datos=filas
+    .filter(r=>
+      jornadaCoincideSucursal(r[2],sucursales)
+    )
+    .map(r=>({
+      nombre:(r[1]||'').toString().trim(),
+      sucursal:(r[2]||'').toString().trim(),
+      lun:abreviarHorario(r[3]),
+      mar:abreviarHorario(r[4]),
+      mie:abreviarHorario(r[5]),
+      jue:abreviarHorario(r[6]),
+      vie:abreviarHorario(r[7]),
+      sab:abreviarHorario(r[8]),
+      dom:abreviarHorario(r[9])
+    }))
+    .filter(r=>r.nombre)
+    .sort((a,b)=>{
+      const sa=normaliza(a.sucursal)
+      const sb=normaliza(b.sucursal)
+
+      if(sa!==sb)return sa.localeCompare(sb)
+
+      return normaliza(a.nombre).localeCompare(
+        normaliza(b.nombre)
+      )
+    })
+
+  const dias=[
+    ['LUN',170],
+    ['MAR',170],
+    ['MIÉ',170],
+    ['JUE',170],
+    ['VIE',170],
+    ['SÁB',170],
+    ['DOM',170]
+  ]
+
+  const anchoSucursal=150
+  const anchoEmpleado=300
+  const anchoDia=170
+  const margen=30
+  const ancho=
+    margen*2+
+    anchoSucursal+
+    anchoEmpleado+
+    dias.reduce((a,b)=>a+b[1],0)
+
+  const altoCabecera=150
+  const altoFila=55
+  const altoPie=70
+
+  const alto=Math.max(
+    300,
+    altoCabecera+
+    datos.length*altoFila+
+    altoPie+
+    30
+  )
+
+  const rects=[]
+  const textos=[]
+
+  rects.push(
+    `<rect x="0" y="0" width="${ancho}" height="${alto}" fill="#ffffff"/>`
+  )
+
+  textos.push(
+    `<text x="${margen}" y="55" font-family="Arial, sans-serif" font-size="30" font-weight="700" fill="#111111">JORNADA SEMANAL</text>`
+  )
+
+  textos.push(
+    `<text x="${margen}" y="92" font-family="Arial, sans-serif" font-size="20" fill="#555555">${escaparSvg(sucursales.join(' / ').toUpperCase())}</text>`
+  )
+
+  textos.push(
+    `<text x="${ancho-margen}" y="55" text-anchor="end" font-family="Arial, sans-serif" font-size="18" fill="#777777">${escaparSvg(fechaLaboral())}</text>`
+  )
+
+  const yHeader=115
+  const x0=margen
+
+  const columnas=[
+    ['SUCURSAL',anchoSucursal],
+    ['EMPLEADO',anchoEmpleado],
+    ...dias
+  ]
+
+  let x=x0
+
+  for(const [titulo,w] of columnas){
+
+    rects.push(
+      `<rect x="${x}" y="${yHeader}" width="${w}" height="${altoFila}" fill="#eeeeee" stroke="#cccccc"/>`
+    )
+
+    textos.push(
+      `<text x="${x+w/2}" y="${yHeader+35}" text-anchor="middle" font-family="Arial, sans-serif" font-size="17" font-weight="700" fill="#111111">${titulo}</text>`
+    )
+
+    x+=w
+  }
+
+  let y=yHeader+altoFila
+
+  for(const r of datos){
+
+    const valores=[
+      anchoTextoSvg(r.sucursal,18),
+      anchoTextoSvg(r.nombre,32),
+      r.lun,
+      r.mar,
+      r.mie,
+      r.jue,
+      r.vie,
+      r.sab,
+      r.dom
+    ]
+
+    x=x0
+
+    for(let i=0;i<columnas.length;i++){
+
+      const w=columnas[i][1]
+
+      rects.push(
+        `<rect x="${x}" y="${y}" width="${w}" height="${altoFila}" fill="#ffffff" stroke="#dddddd"/>`
+      )
+
+      const valor=valores[i]
+
+      textos.push(
+        `<text x="${x+w/2}" y="${y+35}" text-anchor="middle" font-family="Arial, sans-serif" font-size="${i===1?15:14}" fill="#111111">${escaparSvg(valor)}</text>`
+      )
+
+      x+=w
+    }
+
+    y+=altoFila
+  }
+
+  textos.push(
+    `<text x="${margen}" y="${alto-20}" font-family="Arial, sans-serif" font-size="15" fill="#777777">Total empleados: ${datos.length}</text>`
+  )
+
+  const svg=
+`<svg xmlns="http://www.w3.org/2000/svg" width="${ancho}" height="${alto}" viewBox="0 0 ${ancho} ${alto}">
+${rects.join('\n')}
+${textos.join('\n')}
+</svg>`
+
+  const buffer=await sharp(
+    Buffer.from(svg)
+  )
+    .png()
+    .toBuffer()
+
+  const fileName=
+    `Jornada_Semanal_${fechaLaboral().replace(/\//g,'-')}.png`
+
+  await sock.sendMessage(jid,{
+    image:buffer,
+    mimetype:'image/png',
+    fileName,
+    caption:`📅 *JORNADA SEMANAL*\n${sucursales.join(' / ')}\nEmpleados: ${datos.length}`
+  })
+}
+
+export async function jornadaSemanal(
+  filtroGrupo,
+  jid,
+  sock
+){
+
+  const base=await getRows('Horario_Base!A2:K')
+
+  if(!base.length){
+
+    await sock.sendMessage(jid,{
+      text:'No hay información disponible en Horario_Base.'
+    })
+
+    return
+  }
+
+  try{
+
+    await generarImagenJornada(
+      base,
+      filtroGrupo,
+      jid,
+      sock
+    )
+
+  }catch(error){
+
+    console.error(
+      'ERROR GENERANDO JORNADA SEMANAL:',
+      error
+    )
+
+    await sock.sendMessage(jid,{
+      text:'No fue posible generar la imagen de la jornada semanal. Revisa que la dependencia de imagen esté instalada.'
+    })
+  }
+}
 
 // =====================================================
 // BUSCAR EMPLEADO
@@ -533,31 +841,49 @@ async function buscarEmpleado(nombreBuscar,filtroGrupo=null){
   return candidatos
 }
 
-
 // =====================================================
 // DATOS GENERALES DEL EMPLEADO
 // =====================================================
 
-async function enviarDatosEmpleado(nombreBuscar,jid,sock,filtroGrupo){
+async function enviarDatosEmpleado(
+  nombreBuscar,
+  jid,
+  sock,
+  filtroGrupo
+){
 
-  const candidatos=await buscarEmpleado(nombreBuscar,filtroGrupo)
+  const candidatos=await buscarEmpleado(
+    nombreBuscar,
+    filtroGrupo
+  )
 
   if(!candidatos.length){
+
     await sock.sendMessage(jid,{
       text:'No se encontró empleado en esta sucursal.'
     })
+
     return
   }
 
-  if(candidatos.length>1&&candidatos[0].score===candidatos[1].score){
+  if(
+    candidatos.length>1&&
+    candidatos[0].score===candidatos[1].score
+  ){
 
     const opciones=candidatos
       .slice(0,5)
-      .map(x=>`• ${nombreEmpleado(x.r)} - ${sucursalEmpleado(x.r)}`)
+      .map(x=>
+        `• ${nombreEmpleado(x.r)} - ${sucursalEmpleado(x.r)}`
+      )
       .join('\n')
 
     await sock.sendMessage(jid,{
-      text:`Encontré más de un empleado:\n${opciones}\n\nEspecifica un poco más el nombre.`
+      text:
+`Encontré más de un empleado:
+${opciones}
+
+Especifica un poco más el nombre.`
     })
 
     return
@@ -565,7 +891,11 @@ async function enviarDatosEmpleado(nombreBuscar,jid,sock,filtroGrupo){
 
   const r=candidatos[0].r
 
-  const status=(r[16]||'').toString().trim().toUpperCase()
+  const status=
+    (r[16]||'')
+      .toString()
+      .trim()
+      .toUpperCase()
 
   let txt=`📋 *${nombreEmpleado(r)}*`
 
@@ -590,31 +920,49 @@ async function enviarDatosEmpleado(nombreBuscar,jid,sock,filtroGrupo){
   await sock.sendMessage(jid,{text:txt})
 }
 
-
 // =====================================================
 // DATOS BANCARIOS
 // =====================================================
 
-async function enviarDatosBancarios(nombreBuscar,jid,sock,filtroGrupo){
+async function enviarDatosBancarios(
+  nombreBuscar,
+  jid,
+  sock,
+  filtroGrupo
+){
 
-  const candidatos=await buscarEmpleado(nombreBuscar,filtroGrupo)
+  const candidatos=await buscarEmpleado(
+    nombreBuscar,
+    filtroGrupo
+  )
 
   if(!candidatos.length){
+
     await sock.sendMessage(jid,{
       text:'No se encontró empleado en esta sucursal.'
     })
+
     return
   }
 
-  if(candidatos.length>1&&candidatos[0].score===candidatos[1].score){
+  if(
+    candidatos.length>1&&
+    candidatos[0].score===candidatos[1].score
+  ){
 
     const opciones=candidatos
       .slice(0,5)
-      .map(x=>`• ${nombreEmpleado(x.r)} - ${sucursalEmpleado(x.r)}`)
+      .map(x=>
+        `• ${nombreEmpleado(x.r)} - ${sucursalEmpleado(x.r)}`
+      )
       .join('\n')
 
     await sock.sendMessage(jid,{
-      text:`Encontré más de un empleado:\n${opciones}\n\nEspecifica un poco más el nombre.`
+      text:
+`Encontré más de un empleado:
+${opciones}
+
+Especifica un poco más el nombre.`
     })
 
     return
@@ -644,13 +992,17 @@ async function enviarDatosBancarios(nombreBuscar,jid,sock,filtroGrupo){
   if(!banco&&!dato){
 
     await sock.sendMessage(jid,{
-      text:`🏦 ${nombreEmpleado(r)}\nSin datos bancarios registrados.`
+      text:
+`🏦 ${nombreEmpleado(r)}
+Sin datos bancarios registrados.`
     })
 
     return
   }
 
-  let txt=`🏦 *${nombreEmpleado(r)}*\nBanco: ${banco||'-'}`
+  let txt=
+`🏦 *${nombreEmpleado(r)}*
+Banco: ${banco||'-'}`
 
   if(tipo){
     txt+=`\n${tipo}: ${dato}`
@@ -661,12 +1013,16 @@ async function enviarDatosBancarios(nombreBuscar,jid,sock,filtroGrupo){
   await sock.sendMessage(jid,{text:txt})
 }
 
-
 // =====================================================
 // RESUMEN EMPLEADO
 // =====================================================
 
-export async function resumenEmpleado(nombreBuscar,jidRespuesta,sock,tipo='actual'){
+export async function resumenEmpleado(
+  nombreBuscar,
+  jidRespuesta,
+  sock,
+  tipo='actual'
+){
 
   const sClient=await sheetsClient()
 
@@ -682,17 +1038,27 @@ export async function resumenEmpleado(nombreBuscar,jidRespuesta,sock,tipo='actua
 
   const buscar=normaliza(
     nombreBuscar
-      .replace(/actual|pasada|pasado|esta semana|hoy/g,'')
+      .replace(
+        /actual|pasada|pasado|esta semana|hoy/g,
+        ''
+      )
   )
 
-  const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
+  const {
+    lunes,
+    domingo,
+    rangoTxt
+  }=getRangoSemana(tipo)
 
   const info=
-    baseMap[buscar] ||
+    baseMap[buscar]||
     Object.values(baseMap).find(v=>
       normaliza(v.nombreOriginal).includes(buscar)
-    ) ||
-    {descansos:new Set(),horas:{}}
+    )||
+    {
+      descansos:new Set(),
+      horas:{}
+    }
 
   let diasSem=0
   let retSem=0
@@ -718,7 +1084,11 @@ export async function resumenEmpleado(nombreBuscar,jidRespuesta,sock,tipo='actua
     if(fe<lunes||fe>domingo)continue
 
     if(esDescansoRegistro(f)){
-      detalle.push(`• ${f[2]}: DESCANSO`)
+
+      detalle.push(
+        `• ${f[2]}: DESCANSO`
+      )
+
       continue
     }
 
@@ -729,8 +1099,14 @@ export async function resumenEmpleado(nombreBuscar,jidRespuesta,sock,tipo='actua
     if(esTrabajoDescanso(f)){
 
       if(f[5]){
+
         const mt=minutosTrabajados(
-          calcularExtra(f[3],f[5],null,null).trabajadas
+          calcularExtra(
+            f[3],
+            f[5],
+            null,
+            null
+          ).trabajadas
         )
 
         horasMin+=mt
@@ -739,7 +1115,8 @@ export async function resumenEmpleado(nombreBuscar,jidRespuesta,sock,tipo='actua
 
     }else{
 
-      const ret=(f[4]||'').match(/(\d+)\s*min/)
+      const ret=(f[4]||'')
+        .match(/(\d+)\s*min/)
 
       if(ret){
         retSem++
@@ -750,7 +1127,8 @@ export async function resumenEmpleado(nombreBuscar,jidRespuesta,sock,tipo='actua
         sin.push(f[2])
       }
 
-      const progDia=info.horas?.[fe.getDay()]
+      const progDia=
+        info.horas?.[fe.getDay()]
 
       if(f[3]&&f[5]&&progDia){
 
@@ -761,7 +1139,11 @@ export async function resumenEmpleado(nombreBuscar,jidRespuesta,sock,tipo='actua
           progDia.salida
         )
 
-        horasMin+=minutosTrabajados(calc.trabajadas)
+        horasMin+=
+          minutosTrabajados(
+            calc.trabajadas
+          )
+
         extraTotal+=calc.extraMin
       }
     }
@@ -784,14 +1166,27 @@ export async function resumenEmpleado(nombreBuscar,jidRespuesta,sock,tipo='actua
     }
   }
 
-  const faltas=Math.max(0,esperados-diasSem)
+  const faltas=
+    Math.max(
+      0,
+      esperados-diasSem
+    )
 
-  const diasNom=['Dom','Lun','Mar','Mie','Jue','Vie','Sab']
+  const diasNom=[
+    'Dom',
+    'Lun',
+    'Mar',
+    'Mie',
+    'Jue',
+    'Vie',
+    'Sab'
+  ]
 
   const descTxt=
     [...info.descansos]
       .map(d=>diasNom[d])
-      .join(', ')||'ninguno'
+      .join(', ')||
+    'ninguno'
 
   const txt=
 `📊 *${buscar.toUpperCase()}*
@@ -810,9 +1205,13 @@ ${rangoTxt}
 *Detalle:*
 ${detalle.join('\n')||'Sin registros'}`
 
-  await sock.sendMessage(jidRespuesta,{text:txt})
+  await sock.sendMessage(
+    jidRespuesta,
+    {text:txt}
+  )
 
   if(diasSem>0){
+
     await generarExcelEmpleado(
       buscar,
       jidRespuesta,
@@ -821,7 +1220,6 @@ ${detalle.join('\n')||'Sin registros'}`
     )
   }
 }
-
 
 // =====================================================
 // EXCEL EMPLEADO
@@ -837,23 +1235,36 @@ export async function generarExcelEmpleado(
   const sClient=await sheetsClient()
   const baseMap=await getHorarioBaseMap()
 
-  const asisRes=await sClient.spreadsheets.values.get({
-    spreadsheetId:SPREADSHEET_ID,
-    range:'Asistencia!A2:M'
-  })
+  const asisRes=
+    await sClient.spreadsheets.values.get({
+      spreadsheetId:SPREADSHEET_ID,
+      range:'Asistencia!A2:M'
+    })
 
   const filas=asisRes.data.values||[]
 
   const buscar=normaliza(
     nombreBuscarRaw
-      .replace(/actual|pasada|pasado|esta semana|hoy/g,'')
+      .replace(
+        /actual|pasada|pasado|esta semana|hoy/g,
+        ''
+      )
   )
 
-  const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
+  const {
+    lunes,
+    domingo,
+    rangoTxt
+  }=getRangoSemana(tipo)
 
   const filtradas=filas.filter(f=>{
-    if(!normaliza(f[1]||'').includes(buscar))return false
+
+    if(!normaliza(f[1]||'').includes(buscar)){
+      return false
+    }
+
     const fe=parseFechaMX(f[2])
+
     return fe&&fe>=lunes&&fe<=domingo
   })
 
@@ -862,7 +1273,10 @@ export async function generarExcelEmpleado(
 
   ws.addRow([
     `REPORTE ${buscar.toUpperCase()} - ${tipo.toUpperCase()}`
-  ]).font={bold:true,size:14}
+  ]).font={
+    bold:true,
+    size:14
+  }
 
   ws.addRow([rangoTxt])
   ws.addRow([])
@@ -880,7 +1294,8 @@ export async function generarExcelEmpleado(
 
     if(f[3])dias++
 
-    const m=(f[4]||'').match(/(\d+)\s*min/)
+    const m=(f[4]||'')
+      .match(/(\d+)\s*min/)
 
     if(m){
       ret++
@@ -894,7 +1309,12 @@ export async function generarExcelEmpleado(
       if(esTrabajoDescanso(f)){
 
         const mt=minutosTrabajados(
-          calcularExtra(f[3],f[5],null,null).trabajadas
+          calcularExtra(
+            f[3],
+            f[5],
+            null,
+            null
+          ).trabajadas
         )
 
         horasMin+=mt
@@ -904,7 +1324,9 @@ export async function generarExcelEmpleado(
 
         const fe=parseFechaMX(f[2])
         const tel=tel10(f[0])
-        const prog=baseMap[tel]?.horas?.[fe?.getDay()]
+
+        const prog=
+          baseMap[tel]?.horas?.[fe?.getDay()]
 
         const calc=calcularExtra(
           f[3],
@@ -913,7 +1335,11 @@ export async function generarExcelEmpleado(
           prog?.salida||null
         )
 
-        horasMin+=minutosTrabajados(calc.trabajadas)
+        horasMin+=
+          minutosTrabajados(
+            calc.trabajadas
+          )
+
         extraMin+=calc.extraMin
       }
     }
@@ -939,7 +1365,9 @@ export async function generarExcelEmpleado(
     formatoHoras(extraMin)
   ])
 
-  ws.columns.forEach(c=>c.width=22)
+  ws.columns.forEach(
+    c=>c.width=22
+  )
 
   const ws2=wb.addWorksheet('Detalle')
 
@@ -959,9 +1387,12 @@ export async function generarExcelEmpleado(
     'Jornada Programada'
   ]
 
-  ws2.addRow(header).font={bold:true}
+  ws2.addRow(header).font={
+    bold:true
+  }
 
   for(const f of filtradas){
+
     ws2.addRow([
       f[0]||'',
       f[1]||'',
@@ -979,18 +1410,25 @@ export async function generarExcelEmpleado(
     ])
   }
 
-  ws2.columns.forEach(c=>c.width=18)
+  ws2.columns.forEach(
+    c=>c.width=18
+  )
 
   const fileName=
     `Reporte_${buscar.replace(/\s+/g,'_')}_${tipo}.xlsx`
 
-  const fp=path.join(os.tmpdir(),fileName)
+  const fp=
+    path.join(
+      os.tmpdir(),
+      fileName
+    )
 
   await wb.xlsx.writeFile(fp)
 
   await sock.sendMessage(jid,{
     document:fs.readFileSync(fp),
-    mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    mimetype:
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     fileName
   })
 
@@ -998,7 +1436,6 @@ export async function generarExcelEmpleado(
     fs.unlinkSync(fp)
   }catch{}
 }
-
 
 // =====================================================
 // REPORTE POR SUCURSAL
@@ -1011,9 +1448,17 @@ export async function reporteSucursal(
   tipo='pasada'
 ){
 
-  const {asis,emp,base}=await cargarDatos()
+  const {
+    asis,
+    emp,
+    base
+  }=await cargarDatos()
 
-  const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
+  const {
+    lunes,
+    domingo,
+    rangoTxt
+  }=getRangoSemana(tipo)
 
   const telEmp=mapaEmpleados(emp)
   const telBase=mapaBase(base)
@@ -1037,7 +1482,12 @@ export async function reporteSucursal(
       telBase[tel]?.[2]||
       ''
 
-    if(!sucursalCoincideAsignada(sucAsignada,filtroSucursal)){
+    if(
+      !sucursalCoincideAsignada(
+        sucAsignada,
+        filtroSucursal
+      )
+    ){
       continue
     }
 
@@ -1049,9 +1499,12 @@ export async function reporteSucursal(
       f[1]||
       'Desconocido'
 
-    const key=tel||normaliza(nombre)
+    const key=
+      tel||
+      normaliza(nombre)
 
     if(!datos[key]){
+
       datos[key]={
         nombre,
         tel,
@@ -1075,8 +1528,14 @@ export async function reporteSucursal(
     if(esTrabajoDescanso(f)){
 
       if(f[5]){
+
         const mt=minutosTrabajados(
-          calcularExtra(f[3],f[5],null,null).trabajadas
+          calcularExtra(
+            f[3],
+            f[5],
+            null,
+            null
+          ).trabajadas
         )
 
         d.horasMin+=mt
@@ -1086,7 +1545,8 @@ export async function reporteSucursal(
       continue
     }
 
-    const m=(f[4]||'').match(/(\d+)\s*min/)
+    const m=(f[4]||'')
+      .match(/(\d+)\s*min/)
 
     if(m){
       d.ret++
@@ -1095,9 +1555,13 @@ export async function reporteSucursal(
 
     if(f[3]&&f[5]){
 
-      const horario=telBase[tel]
-        ? getHorarioDia(telBase[tel],fe.getDay())
-        : ''
+      const horario=
+        telBase[tel]
+          ?getHorarioDia(
+            telBase[tel],
+            fe.getDay()
+          )
+          :''
 
       const p=parseHorarioRango(horario)
 
@@ -1108,7 +1572,11 @@ export async function reporteSucursal(
         p?.salida||null
       )
 
-      d.horasMin+=minutosTrabajados(calc.trabajadas)
+      d.horasMin+=
+        minutosTrabajados(
+          calc.trabajadas
+        )
+
       d.extraMin+=calc.extraMin
     }
   }
@@ -1141,9 +1609,11 @@ Sin salida: ${d.sin}
     }
   }
 
-  await sock.sendMessage(jid,{text:txt})
+  await sock.sendMessage(
+    jid,
+    {text:txt}
+  )
 }
-
 
 // =====================================================
 // EXCEL POR SUCURSAL
@@ -1156,9 +1626,17 @@ export async function generarExcelSemanaYEnviar(
   tipo='pasada'
 ){
 
-  const {asis,emp,base}=await cargarDatos()
+  const {
+    asis,
+    emp,
+    base
+  }=await cargarDatos()
 
-  const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
+  const {
+    lunes,
+    domingo,
+    rangoTxt
+  }=getRangoSemana(tipo)
 
   const telEmp=mapaEmpleados(emp)
   const telBase=mapaBase(base)
@@ -1181,7 +1659,12 @@ export async function generarExcelSemanaYEnviar(
       telBase[tel]?.[2]||
       ''
 
-    if(!sucursalCoincideAsignada(sucAsignada,filtroSucursal)){
+    if(
+      !sucursalCoincideAsignada(
+        sucAsignada,
+        filtroSucursal
+      )
+    ){
       continue
     }
 
@@ -1201,9 +1684,12 @@ export async function generarExcelSemanaYEnviar(
       f[1]||
       'Desconocido'
 
-    const key=tel||normaliza(nombre)
+    const key=
+      tel||
+      normaliza(nombre)
 
     if(!datos[key]){
+
       datos[key]={
         nombre,
         tel,
@@ -1225,8 +1711,14 @@ export async function generarExcelSemanaYEnviar(
     if(esTrabajoDescanso(f)){
 
       if(f[5]){
+
         const mt=minutosTrabajados(
-          calcularExtra(f[3],f[5],null,null).trabajadas
+          calcularExtra(
+            f[3],
+            f[5],
+            null,
+            null
+          ).trabajadas
         )
 
         d.horasMin+=mt
@@ -1236,7 +1728,8 @@ export async function generarExcelSemanaYEnviar(
       continue
     }
 
-    const m=(f[4]||'').match(/(\d+)\s*min/)
+    const m=(f[4]||'')
+      .match(/(\d+)\s*min/)
 
     if(m){
       d.ret++
@@ -1245,9 +1738,13 @@ export async function generarExcelSemanaYEnviar(
 
     if(f[3]&&f[5]){
 
-      const horario=telBase[tel]
-        ? getHorarioDia(telBase[tel],parseFechaMX(f[2]).getDay())
-        : ''
+      const horario=
+        telBase[tel]
+          ?getHorarioDia(
+            telBase[tel],
+            parseFechaMX(f[2]).getDay()
+          )
+          :''
 
       const p=parseHorarioRango(horario)
 
@@ -1258,7 +1755,11 @@ export async function generarExcelSemanaYEnviar(
         p?.salida||null
       )
 
-      d.horasMin+=minutosTrabajados(calc.trabajadas)
+      d.horasMin+=
+        minutosTrabajados(
+          calc.trabajadas
+        )
+
       d.extraMin+=calc.extraMin
     }
   }
@@ -1269,7 +1770,10 @@ export async function generarExcelSemanaYEnviar(
 
   ws.addRow([
     `REPORTE ${String(filtroSucursal).toUpperCase()} - ${tipo}`
-  ]).font={bold:true,size:14}
+  ]).font={
+    bold:true,
+    size:14
+  }
 
   ws.addRow([rangoTxt])
   ws.addRow([])
@@ -1283,7 +1787,9 @@ export async function generarExcelSemanaYEnviar(
     'Sin salida',
     'Horas Trab',
     'Horas Extra'
-  ]).font={bold:true}
+  ]).font={
+    bold:true
+  }
 
   for(const key of Object.keys(datos)){
 
@@ -1301,7 +1807,9 @@ export async function generarExcelSemanaYEnviar(
     ])
   }
 
-  ws.columns.forEach(c=>c.width=22)
+  ws.columns.forEach(
+    c=>c.width=22
+  )
 
   const ws2=wb.addWorksheet('Detalle')
 
@@ -1321,7 +1829,9 @@ export async function generarExcelSemanaYEnviar(
     'Jornada'
   ]
 
-  ws2.addRow(header).font={bold:true}
+  ws2.addRow(header).font={
+    bold:true
+  }
 
   for(const f of filtradas){
 
@@ -1342,18 +1852,25 @@ export async function generarExcelSemanaYEnviar(
     ])
   }
 
-  ws2.columns.forEach(c=>c.width=18)
+  ws2.columns.forEach(
+    c=>c.width=18
+  )
 
   const fileName=
     `Reporte_${filtroSucursal}_${tipo}_${lunes.toISOString().split('T')[0]}.xlsx`
 
-  const fp=path.join(os.tmpdir(),fileName)
+  const fp=
+    path.join(
+      os.tmpdir(),
+      fileName
+    )
 
   await wb.xlsx.writeFile(fp)
 
   await sock.sendMessage(jid,{
     document:fs.readFileSync(fp),
-    mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    mimetype:
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     fileName
   })
 
@@ -1362,27 +1879,39 @@ export async function generarExcelSemanaYEnviar(
   }catch{}
 }
 
-
 // =====================================================
 // FALTAS Y RETARDOS - 45 DÍAS
 // =====================================================
 
 async function analizar45Dias(filtroSucursal){
 
-  const {asis,emp,base}=await cargarDatos()
+  const {
+    asis,
+    emp,
+    base
+  }=await cargarDatos()
 
   const telEmp=mapaEmpleados(emp)
   const telBase=mapaBase(base)
 
   const hasta=new Date(
-    new Date().toLocaleString('en-US',{
-      timeZone:'America/Mexico_City'
-    })
+    new Date().toLocaleString(
+      'en-US',
+      {
+        timeZone:'America/Mexico_City'
+      }
+    )
   )
 
-  hasta.setHours(23,59,59,999)
+  hasta.setHours(
+    23,
+    59,
+    59,
+    999
+  )
 
-  const desde=fechaDesdeHoy(DIAS_CRITICOS)
+  const desde=
+    fechaDesdeHoy(DIAS_CRITICOS)
 
   const faltas={}
   const retardos={}
@@ -1394,7 +1923,12 @@ async function analizar45Dias(filtroSucursal){
 
     if(!tel)continue
 
-    if(!sucursalCoincideAsignada(suc,filtroSucursal)){
+    if(
+      !sucursalCoincideAsignada(
+        suc,
+        filtroSucursal
+      )
+    ){
       continue
     }
 
@@ -1406,28 +1940,44 @@ async function analizar45Dias(filtroSucursal){
       d.setDate(d.getDate()+1)
     ){
 
-      const fecha=d.toISOString().slice(0,10)
+      const fecha=
+        d.toISOString().slice(0,10)
+
       const dia=d.getDay()
 
-      const horario=getHorarioDia(r,dia)
+      const horario=
+        getHorarioDia(r,dia)
 
       if(!horario)continue
 
-      if(horario.toLowerCase().includes('descanso'))continue
+      if(
+        horario
+          .toLowerCase()
+          .includes('descanso')
+      ){
+        continue
+      }
 
-      const parsed=parseHorarioRango(horario)
+      const parsed=
+        parseHorarioRango(horario)
 
-      if(!parsed||parsed.entrada==='LIBRE')continue
+      if(
+        !parsed||
+        parsed.entrada==='LIBRE'
+      ){
+        continue
+      }
 
       const registro=asis.find(a=>
-        tel10(a[0])===tel &&
-        fechaClave(a[2])===fecha &&
+        tel10(a[0])===tel&&
+        fechaClave(a[2])===fecha&&
         a[3]
       )
 
       if(!registro){
 
         if(!faltas[tel]){
+
           faltas[tel]={
             nombre,
             sucursal:suc,
@@ -1444,13 +1994,20 @@ async function analizar45Dias(filtroSucursal){
 
       if(esTrabajoDescanso(registro))continue
 
-      const entrada=minutos(registro[3])
-      const prog=minutos(parsed.entrada)
+      const entrada=minutos(
+        registro[3]
+      )
+
+      const prog=minutos(
+        parsed.entrada
+      )
+
       const dif=entrada-prog
 
       if(dif>15){
 
         if(!retardos[tel]){
+
           retardos[tel]={
             nombre,
             sucursal:suc,
@@ -1466,12 +2023,22 @@ async function analizar45Dias(filtroSucursal){
     }
   }
 
-  return {faltas,retardos}
+  return {
+    faltas,
+    retardos
+  }
 }
 
-export async function reporteFaltas(filtroSucursal,jid,sock){
+export async function reporteFaltas(
+  filtroSucursal,
+  jid,
+  sock
+){
 
-  const {faltas}=await analizar45Dias(filtroSucursal)
+  const {faltas}=
+    await analizar45Dias(
+      filtroSucursal
+    )
 
   let txt=
 `❌ *FALTAS ${String(filtroSucursal).toUpperCase()}*
@@ -1500,12 +2067,22 @@ ${d.fechas.map(x=>`• ${x}`).join('\n')}
     txt+='No se encontraron faltas naturales.'
   }
 
-  await sock.sendMessage(jid,{text:txt})
+  await sock.sendMessage(
+    jid,
+    {text:txt}
+  )
 }
 
-export async function reporteRetardos(filtroSucursal,jid,sock){
+export async function reporteRetardos(
+  filtroSucursal,
+  jid,
+  sock
+){
 
-  const {retardos}=await analizar45Dias(filtroSucursal)
+  const {retardos}=
+    await analizar45Dias(
+      filtroSucursal
+    )
 
   let txt=
 `⏰ *RETARDOS ${String(filtroSucursal).toUpperCase()}*
@@ -1525,7 +2102,9 @@ export async function reporteRetardos(filtroSucursal,jid,sock){
 
     txt+=
 `*${d.nombre}*
-${d.fechas.map(x=>`• ${x.fecha} - ${x.minutos} min`).join('\n')}
+${d.fechas.map(
+  x=>`• ${x.fecha} - ${x.minutos} min`
+).join('\n')}
 
 `
   }
@@ -1534,38 +2113,53 @@ ${d.fechas.map(x=>`• ${x.fecha} - ${x.minutos} min`).join('\n')}
     txt+='No se encontraron retardos.'
   }
 
-  await sock.sendMessage(jid,{text:txt})
+  await sock.sendMessage(
+    jid,
+    {text:txt}
+  )
 }
-
 
 // =====================================================
 // CRÍTICOS / GRAVES
 // 3 RETARDOS = 1 FALTA
 // =====================================================
 
-export async function reporteCriticos(filtroSucursal,jid,sock){
+export async function reporteCriticos(
+  filtroSucursal,
+  jid,
+  sock
+){
 
-  const {faltas,retardos}=await analizar45Dias(filtroSucursal)
+  const {
+    faltas,
+    retardos
+  }=await analizar45Dias(
+    filtroSucursal
+  )
 
   const nombres={}
 
   for(const tel of Object.keys(faltas)){
+
     nombres[tel]={
       nombre:faltas[tel].nombre,
       sucursal:faltas[tel].sucursal,
       faltas:faltas[tel].fechas.length,
-      retardos:retardos[tel]?.fechas.length||0
+      retardos:
+        retardos[tel]?.fechas.length||0
     }
   }
 
   for(const tel of Object.keys(retardos)){
 
     if(!nombres[tel]){
+
       nombres[tel]={
         nombre:retardos[tel].nombre,
         sucursal:retardos[tel].sucursal,
         faltas:0,
-        retardos:retardos[tel].fechas.length
+        retardos:
+          retardos[tel].fechas.length
       }
     }
   }
@@ -1603,9 +2197,11 @@ Equivalentes: ${equivalentes}
     txt+='No hay empleados con 3 o más faltas equivalentes.'
   }
 
-  await sock.sendMessage(jid,{text:txt})
+  await sock.sendMessage(
+    jid,
+    {text:txt}
+  )
 }
-
 
 // =====================================================
 // ROUTER PRINCIPAL
@@ -1622,17 +2218,45 @@ export async function handleReportes({
 
   // ================================================
   // LISTA DE REPORTES
+  // SOLO "LISTA DE REPORTES"
+  // ================================================
+
+  if(low==='lista de reportes'){
+
+    await sock.sendMessage(jid,{
+      text:textoListaReportes(
+        filtroGrupo
+      )
+    })
+
+    return true
+  }
+
+  // ================================================
+  // REPORTES SOLOS NO HACEN NADA
   // ================================================
 
   if(
     low==='reportes'||
-    low==='lista de reportes'||
-    low==='lista reportes'
+    low==='reporte'
+  ){
+    return false
+  }
+
+  // ================================================
+  // JORNADA SEMANAL
+  // ================================================
+
+  if(
+    low==='jornada semanal'||
+    low==='jornada'
   ){
 
-    await sock.sendMessage(jid,{
-      text:textoListaReportes(filtroGrupo)
-    })
+    await jornadaSemanal(
+      filtroGrupo,
+      jid,
+      sock
+    )
 
     return true
   }
@@ -1641,10 +2265,15 @@ export async function handleReportes({
   // ASISTENCIA HOY
   // ================================================
 
-  if(low.startsWith('asistencia hoy')){
+  if(
+    low.startsWith('asistencia hoy')
+  ){
 
     let suc=low
-      .replace('asistencia hoy','')
+      .replace(
+        'asistencia hoy',
+        ''
+      )
       .trim()
 
     if(!suc){
@@ -1667,10 +2296,15 @@ export async function handleReportes({
   if(low.startsWith('faltas')){
 
     let suc=low
-      .replace('faltas','')
+      .replace(
+        'faltas',
+        ''
+      )
       .trim()
 
-    if(!suc)suc=filtroGrupo||'coyoacan'
+    if(!suc){
+      suc=filtroGrupo||'coyoacan'
+    }
 
     await reporteFaltas(
       suc,
@@ -1688,10 +2322,15 @@ export async function handleReportes({
   if(low.startsWith('retardos')){
 
     let suc=low
-      .replace('retardos','')
+      .replace(
+        'retardos',
+        ''
+      )
       .trim()
 
-    if(!suc)suc=filtroGrupo||'coyoacan'
+    if(!suc){
+      suc=filtroGrupo||'coyoacan'
+    }
 
     await reporteRetardos(
       suc,
@@ -1712,11 +2351,19 @@ export async function handleReportes({
   ){
 
     let suc=low
-      .replace(/^criticos/,'')
-      .replace(/^graves/,'')
+      .replace(
+        /^criticos/,
+        ''
+      )
+      .replace(
+        /^graves/,
+        ''
+      )
       .trim()
 
-    if(!suc)suc=filtroGrupo||'coyoacan'
+    if(!suc){
+      suc=filtroGrupo||'coyoacan'
+    }
 
     await reporteCriticos(
       suc,
@@ -1731,7 +2378,9 @@ export async function handleReportes({
   // RESUMEN
   // ================================================
 
-  if(low.startsWith('resumen ')){
+  if(
+    low.startsWith('resumen ')
+  ){
 
     let tipo='actual'
 
@@ -1746,12 +2395,14 @@ export async function handleReportes({
       .slice(8)
       .toLowerCase()
       .trim()
-      .replace(/pasada|pasado|actual|esta semana|hoy/g,'')
+      .replace(
+        /pasada|pasado|actual|esta semana|hoy/g,
+        ''
+      )
       .trim()
 
     if(
       limpio.includes('bucareli')||
-      limpio.includes('juarez')||
       limpio.includes('coyo')||
       limpio.includes('hotel')
     ){
@@ -1759,8 +2410,7 @@ export async function handleReportes({
       let suc='coyoacan'
 
       if(
-        limpio.includes('bucareli')||
-        limpio.includes('juarez')
+        limpio.includes('bucareli')
       ){
         suc='bucareli'
       }
@@ -1785,7 +2435,8 @@ export async function handleReportes({
     if(!limpio){
 
       await sock.sendMessage(jid,{
-        text:'Escribe: resumen [nombre] pasada o actual'
+        text:
+          'Escribe: resumen [nombre] pasada o actual'
       })
 
       return true
@@ -1806,7 +2457,9 @@ export async function handleReportes({
   // ================================================
 
   if(
-    /^(reporte|checador|reporte x unidad)/i.test(texto)
+    /^reporte\s+.+/i.test(texto)||
+    /^checador\s+.+/i.test(texto)||
+    /^reporte x unidad\s+.+/i.test(texto)
   ){
 
     const tipo=
@@ -1822,13 +2475,16 @@ export async function handleReportes({
     let suc='coyoacan'
 
     if(
-      low.includes('bucareli')||
-      low.includes('juarez')
+      low.includes('bucareli')
     ){
       suc='bucareli'
-    }else if(low.includes('hotel')){
+    }else if(
+      low.includes('hotel')
+    ){
       suc='hotel'
-    }else if(low.includes('coyo')){
+    }else if(
+      low.includes('coyo')
+    ){
       suc='coyoacan'
     }
 
@@ -1922,7 +2578,8 @@ export async function handleReportes({
     if(!buscar){
 
       await sock.sendMessage(jid,{
-        text:'Escribe por ejemplo: banco Daniel'
+        text:
+          'Escribe por ejemplo: banco Daniel'
       })
 
       return true
@@ -1956,7 +2613,8 @@ export async function handleReportes({
     if(!buscar){
 
       await sock.sendMessage(jid,{
-        text:'Escribe: datos Daniel'
+        text:
+          'Escribe: datos Daniel'
       })
 
       return true
