@@ -102,7 +102,7 @@ const CATALOGO_REPORTES=[
   },
   {
     comando:'jornada semanal',
-    descripcion:'Jornada semanal por sucursal en imagen',
+    descripcion:'Jornada semanal por sucursal y área en imagen',
     grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']
   },
   {
@@ -543,30 +543,48 @@ function abreviarHorario(v){
   return s
 }
 
-function filtroJornada(filtroGrupo){
-  const f=normaliza(filtroGrupo)
+// -----------------------------------------------------
+// SUCURSALES DE JORNADA
+// -----------------------------------------------------
 
-  if(f==='bucareli'){
+function filtroJornada(filtroGrupo,sucursalFiltro=''){
+
+  const f=normaliza(
+    sucursalFiltro||filtroGrupo
+  )
+
+  if(
+    f.includes('bucareli')
+  ){
     return ['bucareli']
   }
 
   if(
-    f==='coyoacan'||
-    f==='coyoacan hotel'||
-    f==='hotel'
+    f.includes('coyoacan')||
+    f.includes('hotel')||
+    f.includes('trinidad')
   ){
     return ['coyoacan','hotel']
   }
 
-  return ['coyoacan','hotel','bucareli']
+  return [
+    'coyoacan',
+    'hotel',
+    'bucareli'
+  ]
 }
 
-function jornadaCoincideSucursal(sucursal,sucursales){
+function jornadaCoincideSucursal(
+  sucursal,
+  sucursales
+){
+
   const x=normaliza(sucursal)
 
   if(!x)return false
 
   return sucursales.some(s=>{
+
     const f=normaliza(s)
 
     if(f==='coyoacan'){
@@ -585,6 +603,144 @@ function jornadaCoincideSucursal(sucursal,sucursales){
   })
 }
 
+// -----------------------------------------------------
+// ÁREA DE JORNADA
+// -----------------------------------------------------
+
+function normalizaArea(area){
+
+  const a=normaliza(area)
+
+  if(
+    a==='cocina'
+  ){
+    return 'cocina'
+  }
+
+  if(
+    a==='barra'
+  ){
+    return 'barra'
+  }
+
+  if(
+    a==='salon'
+  ){
+    return 'salon'
+  }
+
+  return ''
+}
+
+function jornadaCoincideArea(
+  area,
+  areaFiltro
+){
+
+  if(!areaFiltro)return true
+
+  return normalizaArea(area)===
+    normalizaArea(areaFiltro)
+}
+
+function nombreAreaJornada(area){
+
+  const a=normalizaArea(area)
+
+  if(a==='cocina')return 'COCINA'
+  if(a==='barra')return 'BARRA'
+  if(a==='salon')return 'SALÓN'
+
+  return ''
+}
+
+// -----------------------------------------------------
+// FILTROS DE JORNADA
+// -----------------------------------------------------
+
+function obtenerFiltrosJornada(
+  texto,
+  filtroGrupo
+){
+
+  const low=normaliza(texto)
+
+  let sucursal=''
+  let area=''
+
+  if(
+    low.includes('bucareli')
+  ){
+    sucursal='bucareli'
+  }else if(
+    low.includes('coyoacan')||
+    low.includes('hotel')||
+    low.includes('trinidad')
+  ){
+    sucursal='coyoacan'
+  }
+
+  if(
+    low.includes('cocina')
+  ){
+    area='cocina'
+  }else if(
+    low.includes('barra')
+  ){
+    area='barra'
+  }else if(
+    low.includes('salon')
+  ){
+    area='salon'
+  }
+
+  // Si no se indicó sucursal explícitamente,
+  // usamos la sucursal del grupo actual.
+  if(!sucursal){
+
+    const grupo=normaliza(filtroGrupo)
+
+    if(grupo==='bucareli'){
+      sucursal='bucareli'
+    }else if(
+      grupo==='coyoacan'||
+      grupo==='coyoacan hotel'||
+      grupo==='hotel'
+    ){
+      sucursal='coyoacan'
+    }
+  }
+
+  return {
+    sucursal,
+    area
+  }
+}
+
+function textoTituloJornada(
+  sucursal,
+  area
+){
+
+  let titulo=''
+
+  if(sucursal==='bucareli'){
+    titulo='BUCARELI'
+  }else if(sucursal==='coyoacan'){
+    titulo='COYOACÁN / HOTEL'
+  }else{
+    titulo='TODAS LAS SUCURSALES'
+  }
+
+  const a=nombreAreaJornada(area)
+
+  if(a){
+    titulo+=` — ${a}`
+  }
+
+  return titulo
+}
+
 function anchoTextoSvg(texto,max){
   const s=String(texto||'')
 
@@ -593,24 +749,44 @@ function anchoTextoSvg(texto,max){
   return `${s.slice(0,Math.max(1,max-1))}…`
 }
 
+// -----------------------------------------------------
+// GENERAR IMAGEN
+// -----------------------------------------------------
+
 async function generarImagenJornada(
   filas,
   filtroGrupo,
   jid,
-  sock
+  sock,
+  sucursalFiltro='',
+  areaFiltro=''
 ){
 
   const {default:sharp}=await import('sharp')
 
-  const sucursales=filtroJornada(filtroGrupo)
+  const sucursales=filtroJornada(
+    filtroGrupo,
+    sucursalFiltro
+  )
 
   const datos=filas
     .filter(r=>
-      jornadaCoincideSucursal(r[2],sucursales)
+      jornadaCoincideSucursal(
+        r[2],
+        sucursales
+      )
+    )
+    .filter(r=>
+      jornadaCoincideArea(
+        r[10],
+        areaFiltro
+      )
     )
     .map(r=>({
       nombre:(r[1]||'').toString().trim(),
       sucursal:(r[2]||'').toString().trim(),
+      area:(r[10]||'').toString().trim(),
+
       lun:abreviarHorario(r[3]),
       mar:abreviarHorario(r[4]),
       mie:abreviarHorario(r[5]),
@@ -620,16 +796,11 @@ async function generarImagenJornada(
       dom:abreviarHorario(r[9])
     }))
     .filter(r=>r.nombre)
-    .sort((a,b)=>{
-      const sa=normaliza(a.sucursal)
-      const sb=normaliza(b.sucursal)
-
-      if(sa!==sb)return sa.localeCompare(sb)
-
-      return normaliza(a.nombre).localeCompare(
+    .sort((a,b)=>
+      normaliza(a.nombre).localeCompare(
         normaliza(b.nombre)
       )
-    })
+    )
 
   const dias=[
     ['LUN',170],
@@ -641,25 +812,29 @@ async function generarImagenJornada(
     ['DOM',170]
   ]
 
-  const anchoSucursal=150
-  const anchoEmpleado=300
+  // ---------------------------------------------------
+  // SOLO NOMBRE + LUNES A DOMINGO
+  // ---------------------------------------------------
+
+  const anchoEmpleado=320
   const anchoDia=170
   const margen=30
+
   const ancho=
     margen*2+
-    anchoSucursal+
     anchoEmpleado+
-    dias.reduce((a,b)=>a+b[1],0)
+    dias.reduce(
+      (a,b)=>a+b[1],
+      0
+    )
 
   const altoCabecera=150
   const altoFila=55
-  const altoPie=70
 
   const alto=Math.max(
     300,
     altoCabecera+
     datos.length*altoFila+
-    altoPie+
     30
   )
 
@@ -675,7 +850,7 @@ async function generarImagenJornada(
   )
 
   textos.push(
-    `<text x="${margen}" y="92" font-family="Arial, sans-serif" font-size="20" fill="#555555">${escaparSvg(sucursales.join(' / ').toUpperCase())}</text>`
+    `<text x="${margen}" y="92" font-family="Arial, sans-serif" font-size="20" fill="#555555">${escaparSvg(textoTituloJornada(sucursalFiltro,areaFiltro))}</text>`
   )
 
   textos.push(
@@ -686,7 +861,6 @@ async function generarImagenJornada(
   const x0=margen
 
   const columnas=[
-    ['SUCURSAL',anchoSucursal],
     ['EMPLEADO',anchoEmpleado],
     ...dias
   ]
@@ -711,8 +885,7 @@ async function generarImagenJornada(
   for(const r of datos){
 
     const valores=[
-      anchoTextoSvg(r.sucursal,18),
-      anchoTextoSvg(r.nombre,32),
+      anchoTextoSvg(r.nombre,38),
       r.lun,
       r.mar,
       r.mie,
@@ -735,7 +908,7 @@ async function generarImagenJornada(
       const valor=valores[i]
 
       textos.push(
-        `<text x="${x+w/2}" y="${y+35}" text-anchor="middle" font-family="Arial, sans-serif" font-size="${i===1?15:14}" fill="#111111">${escaparSvg(valor)}</text>`
+        `<text x="${x+w/2}" y="${y+35}" text-anchor="middle" font-family="Arial, sans-serif" font-size="${i===0?15:14}" fill="#111111">${escaparSvg(valor)}</text>`
       )
 
       x+=w
@@ -743,10 +916,6 @@ async function generarImagenJornada(
 
     y+=altoFila
   }
-
-  textos.push(
-    `<text x="${margen}" y="${alto-20}" font-family="Arial, sans-serif" font-size="15" fill="#777777">Total empleados: ${datos.length}</text>`
-  )
 
   const svg=
 `<svg xmlns="http://www.w3.org/2000/svg" width="${ancho}" height="${alto}" viewBox="0 0 ${ancho} ${alto}">
@@ -760,29 +929,52 @@ ${textos.join('\n')}
     .png()
     .toBuffer()
 
+  const sufijoSucursal=
+    sucursalFiltro
+      ?String(sucursalFiltro).replace(/\s+/g,'_')
+      :'Todas'
+
+  const sufijoArea=
+    areaFiltro
+      ?`_${normalizaArea(areaFiltro)}`
+      :''
+
   const fileName=
-    `Jornada_Semanal_${fechaLaboral().replace(/\//g,'-')}.png`
+    `Jornada_Semanal_${sufijoSucursal}${sufijoArea}_${fechaLaboral().replace(/\//g,'-')}.png`
+
+  const titulo=
+    textoTituloJornada(
+      sucursalFiltro,
+      areaFiltro
+    )
 
   await sock.sendMessage(jid,{
     image:buffer,
     mimetype:'image/png',
     fileName,
-    caption:`📅 *JORNADA SEMANAL*\n${sucursales.join(' / ')}\nEmpleados: ${datos.length}`
+    caption:
+`📅 *JORNADA SEMANAL*
+${titulo}`
   })
 }
 
 export async function jornadaSemanal(
   filtroGrupo,
   jid,
-  sock
+  sock,
+  sucursalFiltro='',
+  areaFiltro=''
 ){
 
-  const base=await getRows('Horario_Base!A2:K')
+  const base=await getRows(
+    'Horario_Base!A2:K'
+  )
 
   if(!base.length){
 
     await sock.sendMessage(jid,{
-      text:'No hay información disponible en Horario_Base.'
+      text:
+        'No hay información disponible en Horario_Base.'
     })
 
     return
@@ -794,7 +986,9 @@ export async function jornadaSemanal(
       base,
       filtroGrupo,
       jid,
-      sock
+      sock,
+      sucursalFiltro,
+      areaFiltro
     )
 
   }catch(error){
@@ -805,7 +999,8 @@ export async function jornadaSemanal(
     )
 
     await sock.sendMessage(jid,{
-      text:'No fue posible generar la imagen de la jornada semanal. Revisa que la dependencia de imagen esté instalada.'
+      text:
+        'No fue posible generar la imagen de la jornada semanal. Revisa que la dependencia de imagen esté instalada.'
     })
   }
 }
@@ -814,9 +1009,15 @@ export async function jornadaSemanal(
 // BUSCAR EMPLEADO
 // =====================================================
 
-async function buscarEmpleado(nombreBuscar,filtroGrupo=null){
+async function buscarEmpleado(
+  nombreBuscar,
+  filtroGrupo=null
+){
 
-  const empRows=await getRows('Empleados!A:T')
+  const empRows=await getRows(
+    'Empleados!A:T'
+  )
+
   const buscar=normaliza(nombreBuscar)
 
   const candidatos=[]
@@ -827,16 +1028,32 @@ async function buscarEmpleado(nombreBuscar,filtroGrupo=null){
     const completo=r[3]||''
     const suc=r[2]||''
 
-    if(!sucursalCoincideConFiltro(suc,filtroGrupo))continue
+    if(
+      !sucursalCoincideConFiltro(
+        suc,
+        filtroGrupo
+      )
+    ){
+      continue
+    }
 
-    const score=scoreEmpleado(corto,completo,buscar)
+    const score=scoreEmpleado(
+      corto,
+      completo,
+      buscar
+    )
 
     if(score>=0){
-      candidatos.push({r,score})
+      candidatos.push({
+        r,
+        score
+      })
     }
   }
 
-  candidatos.sort((a,b)=>b.score-a.score)
+  candidatos.sort(
+    (a,b)=>b.score-a.score
+  )
 
   return candidatos
 }
@@ -860,7 +1077,8 @@ async function enviarDatosEmpleado(
   if(!candidatos.length){
 
     await sock.sendMessage(jid,{
-      text:'No se encontró empleado en esta sucursal.'
+      text:
+        'No se encontró empleado en esta sucursal.'
     })
 
     return
@@ -897,9 +1115,13 @@ Especifica un poco más el nombre.`
       .trim()
       .toUpperCase()
 
-  let txt=`📋 *${nombreEmpleado(r)}*`
+  let txt=
+    `📋 *${nombreEmpleado(r)}*`
 
-  if(status&&status!=='ACTIVO'){
+  if(
+    status&&
+    status!=='ACTIVO'
+  ){
 
     txt+=
 `\n📅 Ingreso: ${r[5]||'-'}
@@ -917,7 +1139,10 @@ Especifica un poco más el nombre.`
 \n📞 Tel. emergencia: ${r[7]||'-'}`
   }
 
-  await sock.sendMessage(jid,{text:txt})
+  await sock.sendMessage(
+    jid,
+    {text:txt}
+  )
 }
 
 // =====================================================
@@ -939,7 +1164,8 @@ async function enviarDatosBancarios(
   if(!candidatos.length){
 
     await sock.sendMessage(jid,{
-      text:'No se encontró empleado en esta sucursal.'
+      text:
+        'No se encontró empleado en esta sucursal.'
     })
 
     return
@@ -1007,10 +1233,14 @@ Banco: ${banco||'-'}`
   if(tipo){
     txt+=`\n${tipo}: ${dato}`
   }else{
-    txt+='\nSin CLABE, cuenta o tarjeta registrada.'
+    txt+=
+      '\nSin CLABE, cuenta o tarjeta registrada.'
   }
 
-  await sock.sendMessage(jid,{text:txt})
+  await sock.sendMessage(
+    jid,
+    {text:txt}
+  )
 }
 
 // =====================================================
@@ -1161,7 +1391,11 @@ export async function resumenEmpleado(
     d.setDate(d.getDate()+1)
   ){
 
-    if(!info.descansos.has(d.getDay())){
+    if(
+      !info.descansos.has(
+        d.getDay()
+      )
+    ){
       esperados++
     }
   }
@@ -1259,7 +1493,9 @@ export async function generarExcelEmpleado(
 
   const filtradas=filas.filter(f=>{
 
-    if(!normaliza(f[1]||'').includes(buscar)){
+    if(
+      !normaliza(f[1]||'').includes(buscar)
+    ){
       return false
     }
 
@@ -1326,7 +1562,9 @@ export async function generarExcelEmpleado(
         const tel=tel10(f[0])
 
         const prog=
-          baseMap[tel]?.horas?.[fe?.getDay()]
+          baseMap[tel]?.horas?.[
+            fe?.getDay()
+          ]
 
         const calc=calcularExtra(
           f[3],
@@ -1563,7 +1801,9 @@ export async function reporteSucursal(
           )
           :''
 
-      const p=parseHorarioRango(horario)
+      const p=parseHorarioRango(
+        horario
+      )
 
       const calc=calcularExtra(
         f[3],
@@ -1746,7 +1986,9 @@ export async function generarExcelSemanaYEnviar(
           )
           :''
 
-      const p=parseHorarioRango(horario)
+      const p=parseHorarioRango(
+        horario
+      )
 
       const calc=calcularExtra(
         f[3],
@@ -1883,7 +2125,9 @@ export async function generarExcelSemanaYEnviar(
 // FALTAS Y RETARDOS - 45 DÍAS
 // =====================================================
 
-async function analizar45Dias(filtroSucursal){
+async function analizar45Dias(
+  filtroSucursal
+){
 
   const {
     asis,
@@ -1911,7 +2155,9 @@ async function analizar45Dias(filtroSucursal){
   )
 
   const desde=
-    fechaDesdeHoy(DIAS_CRITICOS)
+    fechaDesdeHoy(
+      DIAS_CRITICOS
+    )
 
   const faltas={}
   const retardos={}
@@ -1937,7 +2183,9 @@ async function analizar45Dias(filtroSucursal){
     for(
       let d=new Date(desde);
       d<=hasta;
-      d.setDate(d.getDate()+1)
+      d.setDate(
+        d.getDate()+1
+      )
     ){
 
       const fecha=
@@ -1946,7 +2194,10 @@ async function analizar45Dias(filtroSucursal){
       const dia=d.getDay()
 
       const horario=
-        getHorarioDia(r,dia)
+        getHorarioDia(
+          r,
+          dia
+        )
 
       if(!horario)continue
 
@@ -1959,7 +2210,9 @@ async function analizar45Dias(filtroSucursal){
       }
 
       const parsed=
-        parseHorarioRango(horario)
+        parseHorarioRango(
+          horario
+        )
 
       if(
         !parsed||
@@ -1985,14 +2238,24 @@ async function analizar45Dias(filtroSucursal){
           }
         }
 
-        faltas[tel].fechas.push(fecha)
+        faltas[tel].fechas.push(
+          fecha
+        )
 
         continue
       }
 
-      if(esDescansoRegistro(registro))continue
+      if(
+        esDescansoRegistro(
+          registro
+        )
+      )continue
 
-      if(esTrabajoDescanso(registro))continue
+      if(
+        esTrabajoDescanso(
+          registro
+        )
+      )continue
 
       const entrada=minutos(
         registro[3]
@@ -2048,7 +2311,9 @@ export async function reporteFaltas(
 
   let total=0
 
-  for(const tel of Object.keys(faltas)){
+  for(
+    const tel of Object.keys(faltas)
+  ){
 
     const d=faltas[tel]
 
@@ -2058,7 +2323,9 @@ export async function reporteFaltas(
 
     txt+=
 `*${d.nombre}*
-${d.fechas.map(x=>`• ${x}`).join('\n')}
+${d.fechas.map(
+  x=>`• ${x}`
+).join('\n')}
 
 `
   }
@@ -2092,7 +2359,9 @@ export async function reporteRetardos(
 
   let total=0
 
-  for(const tel of Object.keys(retardos)){
+  for(
+    const tel of Object.keys(retardos)
+  ){
 
     const d=retardos[tel]
 
@@ -2139,7 +2408,9 @@ export async function reporteCriticos(
 
   const nombres={}
 
-  for(const tel of Object.keys(faltas)){
+  for(
+    const tel of Object.keys(faltas)
+  ){
 
     nombres[tel]={
       nombre:faltas[tel].nombre,
@@ -2150,7 +2421,9 @@ export async function reporteCriticos(
     }
   }
 
-  for(const tel of Object.keys(retardos)){
+  for(
+    const tel of Object.keys(retardos)
+  ){
 
     if(!nombres[tel]){
 
@@ -2172,13 +2445,17 @@ export async function reporteCriticos(
 
   let total=0
 
-  for(const tel of Object.keys(nombres)){
+  for(
+    const tel of Object.keys(nombres)
+  ){
 
     const d=nombres[tel]
 
     const equivalentes=
       d.faltas+
-      Math.floor(d.retardos/3)
+      Math.floor(
+        d.retardos/3
+      )
 
     if(equivalentes<3)continue
 
@@ -2194,7 +2471,8 @@ Equivalentes: ${equivalentes}
   }
 
   if(!total){
-    txt+='No hay empleados con 3 o más faltas equivalentes.'
+    txt+=
+      'No hay empleados con 3 o más faltas equivalentes.'
   }
 
   await sock.sendMessage(
@@ -2245,17 +2523,42 @@ export async function handleReportes({
 
   // ================================================
   // JORNADA SEMANAL
+  //
+  // Ejemplos:
+  // jornada semanal
+  // jornada semanal Coyoacán
+  // jornada semanal Bucareli
+  // jornada semanal Coyoacán cocina
+  // jornada semanal Coyoacán barra
+  // jornada semanal Coyoacán salón
+  // jornada semanal Bucareli cocina
+  // jornada semanal Bucareli barra
+  // jornada semanal Bucareli salón
+  //
+  // También acepta:
+  // jornada Coyoacán cocina
+  // jornada Bucareli barra
   // ================================================
 
   if(
     low==='jornada semanal'||
-    low==='jornada'
+    low==='jornada'||
+    low.startsWith('jornada semanal ')||
+    low.startsWith('jornada ')
   ){
+
+    const filtros=
+      obtenerFiltrosJornada(
+        texto,
+        filtroGrupo
+      )
 
     await jornadaSemanal(
       filtroGrupo,
       jid,
-      sock
+      sock,
+      filtros.sucursal,
+      filtros.area
     )
 
     return true
@@ -2293,7 +2596,9 @@ export async function handleReportes({
   // FALTAS
   // ================================================
 
-  if(low.startsWith('faltas')){
+  if(
+    low.startsWith('faltas')
+  ){
 
     let suc=low
       .replace(
@@ -2319,7 +2624,9 @@ export async function handleReportes({
   // RETARDOS
   // ================================================
 
-  if(low.startsWith('retardos')){
+  if(
+    low.startsWith('retardos')
+  ){
 
     let suc=low
       .replace(
