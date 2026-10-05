@@ -14,7 +14,6 @@ export function distM(a,b,c,d){
   return R*2*Math.atan2(Math.sqrt(q),Math.sqrt(1-q))
 }
 
-
 export function fechaLaboral(d=new Date()){
   const mx=new Date(
     d.toLocaleString('en-US',{
@@ -34,7 +33,6 @@ export function fechaLaboral(d=new Date()){
   return `${mx.getFullYear()}-${String(mx.getMonth()+1).padStart(2,'0')}-${String(mx.getDate()).padStart(2,'0')}`
 }
 
-
 export function getSemanaActual(){
   const hoy=new Date()
   const jan1=new Date(hoy.getFullYear(),0,1)
@@ -44,14 +42,12 @@ export function getSemanaActual(){
   ).toString()
 }
 
-
 export function horaMX(d=new Date()){
   return d.toLocaleTimeString('es-MX',{
     hour12:false,
     timeZone:'America/Mexico_City'
   })
 }
-
 
 export function minutos(h){
   const mm=h?.toString().match(/(\d{1,2}):(\d{2})/)
@@ -60,7 +56,6 @@ export function minutos(h){
     ?parseInt(mm[1])*60+parseInt(mm[2])
     :0
 }
-
 
 export function parseHorarioRango(v){
   const s=(v||'').toString().trim()
@@ -95,7 +90,6 @@ export function parseHorarioRango(v){
   }
 }
 
-
 /*
   Convierte una hora HH:MM o HH:MM:SS a minutos.
 */
@@ -111,7 +105,6 @@ function minutosHora(h){
     (partes[1]||0)
   )
 }
-
 
 /*
   Calcula minutos trabajados entre entrada y salida.
@@ -143,7 +136,6 @@ export function minutosTrabajados(hE,hS){
   return diff
 }
 
-
 /*
   Convierte minutos a HH:MM:SS.
 
@@ -158,7 +150,6 @@ export function formatoHoras(min){
 
   return `${h}:${String(m).padStart(2,'0')}:00`
 }
-
 
 /*
   Calcula las horas realmente trabajadas.
@@ -184,7 +175,6 @@ export function calcularHorasTrabajadas(hE,hS){
   return formatoHoras(diff)
 }
 
-
 /*
   Redondea horas extra HACIA ABAJO a bloques de 30 minutos.
 
@@ -209,7 +199,6 @@ export function redondearExtra30(extraMin){
     minutosExtra/30
   )*30
 }
-
 
 /*
   Calcula las horas extra.
@@ -340,7 +329,6 @@ export function calcularExtra(hE,hS,pe,ps){
   }
 }
 
-
 export function parseFechaMX(s){
   if(!s)return null
 
@@ -361,7 +349,6 @@ export function parseFechaMX(s){
   return new Date(s)
 }
 
-
 export function normaliza(s){
   return(s||'')
     .toString()
@@ -370,7 +357,6 @@ export function normaliza(s){
     .toLowerCase()
     .trim()
 }
-
 
 export function getRangoSemana(t){
   const hoy=new Date(
@@ -419,7 +405,6 @@ export function getRangoSemana(t){
   }
 }
 
-
 export function sucursalCoincideConFiltro(s,f){
   if(!f)return true
 
@@ -429,13 +414,12 @@ export function sucursalCoincideConFiltro(s,f){
     return x.includes('coyo')||x.includes('hotel')
   }
 
-  if(f==='juarez'){
-    return x.includes('juarez')||x.includes('bucareli')
+  if(f==='bucareli'){
+    return x.includes('bucareli')
   }
 
   return x.includes(f)
 }
-
 
 export function scoreEmpleado(c,d,b){
   const cc=normaliza(c)
@@ -447,7 +431,6 @@ export function scoreEmpleado(c,d,b){
 
   return-1
 }
-
 
 export function normalizarProveedor(n){
   let x=(n||"")
