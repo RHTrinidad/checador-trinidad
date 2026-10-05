@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import opentype from 'opentype.js'
 import { SPREADSHEET_ID } from './config.js'
 import { getRows, sheetsClient, getHorarioBaseMap } from './sheets.js'
 import { fechaLaboral, horaMX, minutos, parseFechaMX, normaliza, parseHorarioRango, getRangoSemana, sucursalCoincideConFiltro, scoreEmpleado, calcularExtra } from './utils.js'
@@ -905,6 +906,79 @@ function anchoTextoSvg(
 }
 
 // -----------------------------------------------------
+// TEXTO COMO PATH
+// -----------------------------------------------------
+// Railway puede no tener Fontconfig configurado.
+// Por eso NO usamos <text> en el SVG.
+// El texto se convierte directamente a paths
+// utilizando una fuente instalada como dependencia.
+// -----------------------------------------------------
+
+function textoComoPath(
+  font,
+  texto,
+  x,
+  y,
+  fontSize,
+  fill='#111111',
+  anchor='start'
+){
+
+  const s=String(texto??'')
+
+  if(!s)return ''
+
+  let xReal=x
+
+  if(anchor==='middle'){
+
+    const ancho=
+      font.getAdvanceWidth(
+        s,
+        fontSize,
+        {
+          kerning:true
+        }
+      )
+
+    xReal=
+      x-(ancho/2)
+
+  }else if(anchor==='end'){
+
+    const ancho=
+      font.getAdvanceWidth(
+        s,
+        fontSize,
+        {
+          kerning:true
+        }
+      )
+
+    xReal=
+      x-ancho
+  }
+
+  const p=
+    font.getPath(
+      s,
+      xReal,
+      y,
+      fontSize,
+      {
+        kerning:true
+      }
+    )
+
+  const d=
+    p.toPathData(2)
+
+  if(!d)return ''
+
+  return `<path d="${d}" fill="${fill}"/>`
+}
+
+// -----------------------------------------------------
 // GENERAR IMAGEN
 // -----------------------------------------------------
 
@@ -998,6 +1072,43 @@ async function generarImagenJornada(
   }
 
   // ---------------------------------------------------
+  // CARGAR FUENTE LOCAL
+  // ---------------------------------------------------
+  // La fuente viene de @fontsource/dejavu.
+  // No dependemos de fuentes instaladas en Railway.
+  // ---------------------------------------------------
+
+  const fontPath=path.join(
+    process.cwd(),
+    'node_modules',
+    '@fontsource',
+    'dejavu',
+    'files',
+    'dejavu-sans-latin-400-normal.woff'
+  )
+
+  let font
+
+  try{
+
+    font=
+      opentype.loadSync(
+        fontPath
+      )
+
+  }catch(error){
+
+    console.error(
+      'ERROR CARGANDO FUENTE DE JORNADA:',
+      error
+    )
+
+    throw new Error(
+      `No se pudo cargar la fuente de jornada: ${fontPath}`
+    )
+  }
+
+  // ---------------------------------------------------
   // DIAS
   // ---------------------------------------------------
 
@@ -1045,31 +1156,47 @@ async function generarImagenJornada(
   )
 
   // ---------------------------------------------------
-  // FUENTE
-  //
-  // Se usa sans-serif genérica para evitar cuadritos
-  // por ausencia de Arial en Railway.
-  // No usamos emojis dentro de la imagen.
+  // TITULO
   // ---------------------------------------------------
 
-  const fuente='sans-serif'
-
   textos.push(
-    `<text x="${margen}" y="55" font-family="${fuente}" font-size="30" font-weight="700" fill="#111111">JORNADA SEMANAL</text>`
+    textoComoPath(
+      font,
+      'JORNADA SEMANAL',
+      margen,
+      55,
+      30,
+      '#111111',
+      'start'
+    )
   )
 
   textos.push(
-    `<text x="${margen}" y="92" font-family="${fuente}" font-size="20" fill="#555555">${escaparSvg(
+    textoComoPath(
+      font,
       textoTituloJornada(
         sucursalFiltro,
         areaFiltro,
         empleadoFiltro
-      )
-    )}</text>`
+      ),
+      margen,
+      92,
+      20,
+      '#555555',
+      'start'
+    )
   )
 
   textos.push(
-    `<text x="${ancho-margen}" y="55" text-anchor="end" font-family="${fuente}" font-size="18" fill="#777777">${escaparSvg(fechaLaboral())}</text>`
+    textoComoPath(
+      font,
+      fechaLaboral(),
+      ancho-margen,
+      55,
+      18,
+      '#777777',
+      'end'
+    )
   )
 
   const yHeader=115
@@ -1092,7 +1219,15 @@ async function generarImagenJornada(
     )
 
     textos.push(
-      `<text x="${x+w/2}" y="${yHeader+35}" text-anchor="middle" font-family="${fuente}" font-size="17" font-weight="700" fill="#111111">${escaparSvg(titulo)}</text>`
+      textoComoPath(
+        font,
+        titulo,
+        x+w/2,
+        yHeader+35,
+        17,
+        '#111111',
+        'middle'
+      )
     )
 
     x+=w
@@ -1135,7 +1270,15 @@ async function generarImagenJornada(
       const valor=valores[i]
 
       textos.push(
-        `<text x="${x+w/2}" y="${y+35}" text-anchor="middle" font-family="${fuente}" font-size="${i===0?15:14}" fill="#111111">${escaparSvg(valor)}</text>`
+        textoComoPath(
+          font,
+          valor,
+          x+w/2,
+          y+35,
+          i===0?15:14,
+          '#111111',
+          'middle'
+        )
       )
 
       x+=w
