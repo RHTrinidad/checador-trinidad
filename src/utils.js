@@ -21,29 +21,6 @@ export function fechaLaboral(d=new Date()){
     })
   )
 
-  export function diaLaboral(d=new Date()){
-  const mx=new Date(
-    d.toLocaleString('en-US',{
-      timeZone:'America/Mexico_City'
-    })
-  )
-
-  /*
-    El día laboral cambia a las 05:00 AM.
-
-    00:00 - 04:59 todavía pertenece
-    al día laboral anterior.
-
-    Ejemplo:
-    Martes 01:30 → lunes laboral
-    Martes 05:00 → martes laboral
-  */
-  if(mx.getHours()<5){
-    mx.setDate(mx.getDate()-1)
-  }
-
-  return mx.getDay()
-}
   /*
     El día laboral cambia a las 05:00 AM.
     Esto permite que una salida, por ejemplo a la 01:00 AM,
@@ -56,6 +33,33 @@ export function fechaLaboral(d=new Date()){
   return `${mx.getFullYear()}-${String(mx.getMonth()+1).padStart(2,'0')}-${String(mx.getDate()).padStart(2,'0')}`
 }
 
+/*
+  Devuelve el día de la semana correspondiente
+  al día laboral.
+
+  00:00 - 04:59:
+    pertenece al día laboral anterior.
+
+  05:00 en adelante:
+    pertenece al día calendario actual.
+
+  Esto debe utilizarse junto con fechaLaboral()
+  cuando se consulta Horario_Base.
+*/
+export function diaLaboral(d=new Date()){
+  const mx=new Date(
+    d.toLocaleString('en-US',{
+      timeZone:'America/Mexico_City'
+    })
+  )
+
+  if(mx.getHours()<5){
+    mx.setDate(mx.getDate()-1)
+  }
+
+  return mx.getDay()
+}
+
 export function getSemanaActual(){
   const hoy=new Date()
   const jan1=new Date(hoy.getFullYear(),0,1)
@@ -65,6 +69,18 @@ export function getSemanaActual(){
   ).toString()
 }
 
+/*
+  Hora actual de México.
+
+  Se fuerza hourCycle:'h23' para evitar
+  valores como 24:00 o 24:01.
+
+  El bot utilizará:
+    23:59:59
+    00:00:00
+    00:00:01
+    00:01:00
+*/
 export function horaMX(d=new Date()){
   const partes=new Intl.DateTimeFormat('en-GB',{
     timeZone:'America/Mexico_City',
