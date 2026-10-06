@@ -465,47 +465,51 @@ async function generarImagenJornada(
     return
   }
 
-  function buscarFuente(dir){
-    if(!fs.existsSync(dir))return null
-
-    const encontrados=[]
-
-    function recorrer(actual){
-      let items=[]
-      try{
-        items=fs.readdirSync(actual,{withFileTypes:true})
-      }catch{
-        return
-      }
-
-      for(const item of items){
-        const full=path.join(actual,item.name)
-
-        if(item.isDirectory()){
-          recorrer(full)
-          continue
-        }
-
-        const nombre=item.name.toLowerCase()
-
-        if(nombre.endsWith('.ttf')||nombre.endsWith('.otf')||nombre.endsWith('.woff')){
-          encontrados.push(full)
-        }
-      }
+function buscarFuente(dir){
+  if(!fs.existsSync(dir))return null
+  const encontrados=[]
+  function recorrer(actual){
+    let items=[]
+    try{items=fs.readdirSync(actual,{withFileTypes:true})}catch{return}
+    for(const item of items){
+      const full=path.join(actual,item.name)
+      if(item.isDirectory()){recorrer(full);continue}
+      const nombre=item.name.toLowerCase()
+      if(nombre.endsWith('.ttf')||nombre.endsWith('.otf')||nombre.endsWith('.woff'))encontrados.push(full)
     }
-
-    recorrer(dir)
-
-    if(!encontrados.length)return null
-
-    const ttf=encontrados.find(x=>x.toLowerCase().endsWith('.ttf'))
-    if(ttf)return ttf
-
-    const otf=encontrados.find(x=>x.toLowerCase().endsWith('.otf'))
-    if(otf)return otf
-
-    return encontrados.find(x=>x.toLowerCase().endsWith('.woff'))||null
   }
+  recorrer(dir)
+  if(!encontrados.length)return null
+
+  const prioridad=[
+    /roboto-latin-400-normal\.woff$/i,
+    /roboto-400-normal\.woff$/i,
+    /roboto-regular\.woff$/i,
+    /roboto-regular\.ttf$/i,
+    /roboto-regular\.otf$/i
+  ]
+
+  for(const patron of prioridad){
+    const encontrada=encontrados.find(x=>patron.test(x))
+    if(encontrada)return encontrada
+  }
+
+  const regular=encontrados.find(x=>{
+    const n=path.basename(x).toLowerCase()
+    return (n.includes('latin')&&n.includes('400')&&!n.includes('italic'))||
+           n.includes('regular')||
+           n.includes('400-normal')
+  })
+  if(regular)return regular
+
+  const ttf=encontrados.find(x=>x.toLowerCase().endsWith('.ttf'))
+  if(ttf)return ttf
+
+  const otf=encontrados.find(x=>x.toLowerCase().endsWith('.otf'))
+  if(otf)return otf
+
+  return encontrados.find(x=>x.toLowerCase().endsWith('.woff'))||null
+}
 
   const fontDir=path.join(
     process.cwd(),
