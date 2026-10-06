@@ -1169,21 +1169,28 @@ async function generarImagenJornada(
       'dejavu'
     )
 
-  const fontPath=
-    buscarFuente(fontDir)
+  // ===================================================
+// FUENTE PARA JORNADA — USAR TTF/OTF REAL
+// ===================================================
 
-  if(!fontPath){
+const fontPath = buscarFuente(fontDir)
 
-    console.error(
-      'NO SE ENCONTRO FUENTE EN:',
-      fontDir
-    )
+if(!fontPath){
 
-    throw new Error(
-      'No se encontró una fuente compatible en @fontsource/dejavu'
-    )
-  }
+  console.error(
+    'NO SE ENCONTRO FUENTE TTF/OTF EN:',
+    fontDir
+  )
 
+  throw new Error(
+    'No se encontró una fuente TTF/OTF compatible en @fontsource/dejavu'
+  )
+}
+
+console.log(
+  'FUENTE JORNADA:',
+  fontPath
+)
   console.log(
     'FUENTE JORNADA:',
     fontPath
