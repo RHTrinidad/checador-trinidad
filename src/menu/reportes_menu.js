@@ -61,15 +61,15 @@ async function cargarRecetas(){
 
   const[catalogo,subrecetas,rendimientos,platillos,menu]=await Promise.all([
 
-    getRows("'1_CATALOGO'!A:G",SPREADSHEET_RECETAS_ID),
+    getRows('1_CATALOGO!A:G',SPREADSHEET_RECETAS_ID),
 
-    getRows("'2_SUBRECETAS'!A:F",SPREADSHEET_RECETAS_ID),
+    getRows('2_SUBRECETAS!A:F',SPREADSHEET_RECETAS_ID),
 
-    getRows("'3_RENDIMIENTOS'!A:G",SPREADSHEET_RECETAS_ID),
+    getRows('3_RENDIMIENTOS!A:G',SPREADSHEET_RECETAS_ID),
 
-    getRows("'4_PLATILLOS'!A:G",SPREADSHEET_RECETAS_ID),
+    getRows('4_PLATILLOS!A:G',SPREADSHEET_RECETAS_ID),
 
-    getRows("'5_MENU_COSTOS'!A:P",SPREADSHEET_RECETAS_ID)
+    getRows('5_MENU_COSTOS!A:P',SPREADSHEET_RECETAS_ID)
 
   ])
 
@@ -146,14 +146,6 @@ function buscarPlatillos(nombre,menu,platillos,sucursal='',area=''){
     if(p)
       nombres.set(p,r[0])
   }
-
-  /*
-   * Cuando hay sucursal o área especificada,
-   * 5_MENU_COSTOS es la fuente de verdad.
-   *
-   * Sin filtro de sucursal/área permitimos también
-   * buscar directamente en 4_PLATILLOS.
-   */
 
   if(!sucursal&&!area){
 
@@ -1080,14 +1072,6 @@ async function procesarRespuestaContexto({
 
   const n=normaliza(texto)
 
-  /*
-   * RESOLVER PRIMERO EL ÁREA.
-   *
-   * Esto permite contestar simplemente:
-   * cocina
-   * barra
-   */
-
   if(contexto.esperandoArea){
 
     const area=
@@ -1146,10 +1130,6 @@ async function procesarRespuestaContexto({
 
     return true
   }
-
-  /*
-   * RESOLVER SUCURSAL
-   */
 
   if(contexto.esperandoSucursal){
 
@@ -1242,10 +1222,6 @@ async function procesarRespuestaContexto({
     }
   }
 
-  /*
-   * RESOLVER TIPO DE REPORTE
-   */
-
   if(contexto.esperandoTipo){
 
     const tipo=
@@ -1303,10 +1279,6 @@ async function procesarRespuestaContexto({
     })
   }
 
-  /*
-   * RESOLVER LISTA DE PLATILLOS
-   */
-
   if(contexto.esperandoPlatillo){
 
     let platillo=''
@@ -1362,10 +1334,6 @@ async function procesarRespuestaContexto({
 
     return true
   }
-
-  /*
-   * BUSCAR PLATILLO DIRECTAMENTE
-   */
 
   if(contexto.accion==='buscar'){
 
@@ -1423,10 +1391,6 @@ export async function handleReportesMenu({
   const contexto=
     obtenerContexto(jid)
 
-  /*
-   * PRIMERO RESOLVEMOS CONTEXTO.
-   */
-
   if(contexto){
 
     const atendido=
@@ -1441,11 +1405,6 @@ export async function handleReportesMenu({
       return true
   }
 
-  /*
-   * SI NO ES COMANDO DEL MENÚ,
-   * NO TOCAMOS EL RESTO DEL BOT.
-   */
-
   if(!esComandoMenu(t))
     return false
 
@@ -1455,12 +1414,6 @@ export async function handleReportesMenu({
   const esReportes=
     esReporteGeneral(jid)||
     tipoGrupo==='REPORTES'
-
-  /*
-   * =========================
-   * MENU
-   * =========================
-   */
 
   if(/^menu\b/i.test(n)){
 
@@ -1506,12 +1459,6 @@ export async function handleReportesMenu({
     return true
   }
 
-  /*
-   * =========================
-   * RECETARIO
-   * =========================
-   */
-
   if(/^recetario\b/i.test(n)){
 
     const area=
@@ -1519,11 +1466,6 @@ export async function handleReportesMenu({
 
     const suc=
       sucGrupo||nombreSucursal(n)
-
-    /*
-     * EJEMPLO:
-     * recetario cocina bucareli
-     */
 
     if(area&&suc){
 
@@ -1543,11 +1485,6 @@ export async function handleReportesMenu({
       return true
     }
 
-    /*
-     * GRUPO DE SUCURSAL:
-     * recetario cocina
-     */
-
     if(area&&!suc&&!esReportes){
 
       guardarContexto(jid,{
@@ -1564,12 +1501,6 @@ export async function handleReportesMenu({
 
       return true
     }
-
-    /*
-     * REPORTES:
-     * recetario cocina
-     * pregunta sucursal
-     */
 
     if(area&&!suc&&esReportes){
 
@@ -1590,10 +1521,6 @@ export async function handleReportesMenu({
       return true
     }
 
-    /*
-     * recetario sin área
-     */
-
     guardarContexto(jid,{
       accion:'recetario',
       sucursal:suc,
@@ -1609,12 +1536,6 @@ export async function handleReportesMenu({
 
     return true
   }
-
-  /*
-   * =========================
-   * RECETA
-   * =========================
-   */
 
   const matchReceta=
     t.match(
@@ -1660,10 +1581,6 @@ export async function handleReportesMenu({
       return true
     }
 
-    /*
-     * Hay varios y no especificó tipo.
-     */
-
     if(
       coincidencias.length>1&&
       !tipoTexto
@@ -1677,10 +1594,6 @@ export async function handleReportesMenu({
         area
       })
     }
-
-    /*
-     * Hay varios pero ya pidió costos/procesos/etc.
-     */
 
     if(
       coincidencias.length>1&&
@@ -1707,10 +1620,6 @@ export async function handleReportesMenu({
 
     const elegido=
       coincidencias[0]
-
-    /*
-     * Ya indicó tipo de reporte.
-     */
 
     if(tipoTexto){
 
@@ -1752,11 +1661,6 @@ export async function handleReportesMenu({
       })
     }
 
-    /*
-     * Encontró un solo platillo:
-     * preguntar qué reporte quiere.
-     */
-
     guardarContexto(jid,{
       platillo:elegido,
       sucursal:suc,
@@ -1775,12 +1679,6 @@ export async function handleReportesMenu({
 
     return true
   }
-
-  /*
-   * =========================
-   * COTIZAR
-   * =========================
-   */
 
   if(
     /^(cotizar|cotizacion|cotización)\b/i.test(t)
