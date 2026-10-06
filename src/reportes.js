@@ -383,11 +383,7 @@ function obtenerFiltrosJornada(texto,filtroGrupo){
 }
 
 function textoTituloJornada(sucursal,area,empleado=''){
-  let titulo=''
-  if(sucursal==='bucareli')titulo='BUCARELI'
-  else if(sucursal==='coyoacan')titulo='COYOACAN / HOTEL'
-  else titulo='TODAS LAS SUCURSALES'
-
+  let titulo=sucursal==='bucareli'?'BUCARELI':sucursal==='coyoacan'?'COYOACAN':'TODAS LAS SUCURSALES'
   const a=nombreAreaJornada(area)
   if(a)titulo+=` - ${a}`
   if(empleado)titulo+=` - ${empleado.toUpperCase()}`
@@ -420,27 +416,31 @@ function textoComoPath(font,texto,x,y,fontSize,fill='#111111',anchor='start'){
   if(!d)return ''
   return `<path d="${d}" fill="${fill}"/>`
 }
+function rangoSemanaJornada(){
+  const mx=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}))
+  mx.setHours(0,0,0,0)
+  const lunes=new Date(mx)
+  lunes.setDate(mx.getDate()-(mx.getDay()||7)+1)
+  const domingo=new Date(lunes)
+  domingo.setDate(lunes.getDate()+6)
+  const fmt=d=>`${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`
+  return `Semana: ${fmt(lunes)} - ${fmt(domingo)}`
+}
 
+function nombreSucursalJornada(suc){
+  const x=normaliza(suc)
+  if(x.includes('bucareli'))return 'BUCARELI'
+  if(x.includes('coyo')||x.includes('hotel')||x.includes('trinidad'))return 'COYOACAN'
+  return suc||''
+}
 // =====================================================
 // GENERAR IMAGEN
 // =====================================================
 
-async function generarImagenJornada(
-  filas,
-  filtroGrupo,
-  jid,
-  sock,
-  sucursalFiltro='',
-  areaFiltro='',
-  empleadoFiltro=''
-){
-
+async function generarImagenJornada(filas,filtroGrupo,jid,sock,sucursalFiltro='',areaFiltro='',empleadoFiltro=''){
   console.log('🔥 ENTRE A generarImagenJornada - VERSION NUEVA')
-
   const {default:sharp}=await import('sharp')
-
   const sucursales=filtroJornada(filtroGrupo,sucursalFiltro)
-
   const datos=filas
     .filter(r=>jornadaCoincideSucursal(r[2],sucursales))
     .filter(r=>jornadaCoincideArea(r[10],areaFiltro))
@@ -448,7 +448,7 @@ async function generarImagenJornada(
     .map(r=>({
       nombre:(r[1]||'').toString().trim(),
       sucursal:(r[2]||'').toString().trim(),
-      area:(r[10]||'').toString().trim(),
+      area:normalizaArea(r[10]),
       lun:abreviarHorario(r[3]),
       mar:abreviarHorario(r[4]),
       mie:abreviarHorario(r[5]),
@@ -465,299 +465,145 @@ async function generarImagenJornada(
     return
   }
 
-function buscarFuente(dir){
-  if(!fs.existsSync(dir))return null
-  const encontrados=[]
-  function recorrer(actual){
-    let items=[]
-    try{items=fs.readdirSync(actual,{withFileTypes:true})}catch{return}
-    for(const item of items){
-      const full=path.join(actual,item.name)
-      if(item.isDirectory()){recorrer(full);continue}
-      const nombre=item.name.toLowerCase()
-      if(nombre.endsWith('.ttf')||nombre.endsWith('.otf')||nombre.endsWith('.woff'))encontrados.push(full)
+  function buscarFuente(dir){
+    if(!fs.existsSync(dir))return null
+    const encontrados=[]
+    function recorrer(actual){
+      let items=[]
+      try{items=fs.readdirSync(actual,{withFileTypes:true})}catch{return}
+      for(const item of items){
+        const full=path.join(actual,item.name)
+        if(item.isDirectory()){recorrer(full);continue}
+        const nombre=item.name.toLowerCase()
+        if(nombre.endsWith('.ttf')||nombre.endsWith('.otf')||nombre.endsWith('.woff'))encontrados.push(full)
+      }
     }
+    recorrer(dir)
+    if(!encontrados.length)return null
+    const prioridad=[/roboto-latin-400-normal\.woff$/i,/roboto-400-normal\.woff$/i,/roboto-regular\.woff$/i,/roboto-regular\.ttf$/i,/roboto-regular\.otf$/i]
+    for(const patron of prioridad){
+      const encontrada=encontrados.find(x=>patron.test(x))
+      if(encontrada)return encontrada
+    }
+    const regular=encontrados.find(x=>{
+      const n=path.basename(x).toLowerCase()
+      return (n.includes('latin')&&n.includes('400')&&!n.includes('italic'))||n.includes('regular')||n.includes('400-normal')
+    })
+    if(regular)return regular
+    const ttf=encontrados.find(x=>x.toLowerCase().endsWith('.ttf'))
+    if(ttf)return ttf
+    const otf=encontrados.find(x=>x.toLowerCase().endsWith('.otf'))
+    if(otf)return otf
+    return encontrados.find(x=>x.toLowerCase().endsWith('.woff'))||null
   }
-  recorrer(dir)
-  if(!encontrados.length)return null
 
-  const prioridad=[
-    /roboto-latin-400-normal\.woff$/i,
-    /roboto-400-normal\.woff$/i,
-    /roboto-regular\.woff$/i,
-    /roboto-regular\.ttf$/i,
-    /roboto-regular\.otf$/i
-  ]
-
-  for(const patron of prioridad){
-    const encontrada=encontrados.find(x=>patron.test(x))
-    if(encontrada)return encontrada
-  }
-
-  const regular=encontrados.find(x=>{
-    const n=path.basename(x).toLowerCase()
-    return (n.includes('latin')&&n.includes('400')&&!n.includes('italic'))||
-           n.includes('regular')||
-           n.includes('400-normal')
-  })
-  if(regular)return regular
-
-  const ttf=encontrados.find(x=>x.toLowerCase().endsWith('.ttf'))
-  if(ttf)return ttf
-
-  const otf=encontrados.find(x=>x.toLowerCase().endsWith('.otf'))
-  if(otf)return otf
-
-  return encontrados.find(x=>x.toLowerCase().endsWith('.woff'))||null
-}
-
-  const fontDir=path.join(
-    process.cwd(),
-    'node_modules',
-    '@fontsource',
-    'roboto'
-  )
-
+  const fontDir=path.join(process.cwd(),'node_modules','@fontsource','roboto')
   const fontPath=buscarFuente(fontDir)
+  if(!fontPath)throw new Error('No se encontró una fuente compatible en @fontsource/roboto')
 
-  if(!fontPath){
-    console.error('NO SE ENCONTRO FUENTE TTF/OTF EN:',fontDir)
-
-    throw new Error(
-      'No se encontró una fuente TTF/OTF compatible en @fontsource/roboto'
-    )
-  }
-
-  console.log('================================')
-  console.log('FUENTE JORNADA ENCONTRADA:')
-  console.log(fontPath)
-  console.log('EXTENSION:',path.extname(fontPath))
-  console.log('================================')
+  console.log('FUENTE JORNADA:',fontPath)
 
   let font
-
-  try{
-    font=opentype.loadSync(fontPath)
-  }catch(error){
-    console.error('ERROR CARGANDO FUENTE DE JORNADA:',error)
-
-    throw new Error(
-      `No se pudo cargar la fuente: ${fontPath}`
-    )
+  try{font=opentype.loadSync(fontPath)}catch(error){
+    console.error('ERROR CARGANDO FUENTE:',error)
+    throw new Error(`No se pudo cargar la fuente: ${fontPath}`)
   }
 
   function pathTexto(texto,x,y,size,fill='#111111',anchor='start'){
     const s=String(texto??'').replace(/\r/g,'').replace(/\n/g,' ')
     if(!s)return ''
-
-    let xReal=x
-
     try{
       const ancho=font.getAdvanceWidth(s,size,{kerning:true})
-
-      if(anchor==='middle')xReal=x-ancho/2
-      else if(anchor==='end')xReal=x-ancho
-
-      const glyphPath=font.getPath(s,xReal,y,size,{kerning:true})
-      const d=glyphPath.toPathData(3)
-
-      if(!d)return ''
-
-      return `<path d="${d}" fill="${fill}"/>`
-
+      const xReal=anchor==='middle'?x-ancho/2:anchor==='end'?x-ancho:x
+      const d=font.getPath(s,xReal,y,size,{kerning:true}).toPathData(3)
+      return d?`<path d="${d}" fill="${fill}"/>`:''
     }catch(error){
-      console.error('ERROR GENERANDO TEXTO COMO PATH:',s,error)
+      console.error('ERROR TEXTO:',s,error)
       return ''
     }
   }
 
-  const dias=[
-    ['LUN',170],
-    ['MAR',170],
-    ['MIE',170],
-    ['JUE',170],
-    ['VIE',170],
-    ['SAB',170],
-    ['DOM',170]
-  ]
-
-  const anchoEmpleado=320
-  const anchoDia=170
-  const margen=30
-
-  const ancho=
-    margen*2+
-    anchoEmpleado+
-    dias.reduce((a,b)=>a+b[1],0)
-
-  const altoCabecera=150
-  const altoFila=55
-
-  const alto=Math.max(
-    300,
-    altoCabecera+
-    datos.length*altoFila+
-    30
-  )
-
-  const rects=[]
-  const textos=[]
-
-  rects.push(
-    `<rect x="0" y="0" width="${ancho}" height="${alto}" fill="#ffffff"/>`
-  )
-
-  textos.push(
-    pathTexto(
-      'JORNADA SEMANAL',
-      margen,
-      55,
-      30,
-      '#111111',
-      'start'
-    )
-  )
-
-  textos.push(
-    pathTexto(
-      textoTituloJornada(
-        sucursalFiltro,
-        areaFiltro,
-        empleadoFiltro
-      ),
-      margen,
-      92,
-      20,
-      '#555555',
-      'start'
-    )
-  )
-
-  textos.push(
-    pathTexto(
-      fechaLaboral(),
-      ancho-margen,
-      55,
-      18,
-      '#777777',
-      'end'
-    )
-  )
-
-  const yHeader=115
-  const x0=margen
-
-  const columnas=[
-    ['EMPLEADO',anchoEmpleado],
-    ...dias
-  ]
-
-  let x=x0
-
-  for(const [titulo,w] of columnas){
-    rects.push(
-      `<rect x="${x}" y="${yHeader}" width="${w}" height="${altoFila}" fill="#eeeeee" stroke="#cccccc" stroke-width="1"/>`
-    )
-
-    textos.push(
-      pathTexto(
-        titulo,
-        x+w/2,
-        yHeader+35,
-        17,
-        '#111111',
-        'middle'
-      )
-    )
-
-    x+=w
+  const grupos={}
+  for(const r of datos){
+    const suc=nombreSucursalJornada(r.sucursal)
+    const area=r.area||'sinarea'
+    const key=`${suc}|${area}`
+    if(!grupos[key])grupos[key]={sucursal:suc,area,datos:[]}
+    grupos[key].datos.push(r)
   }
 
-  let y=yHeader+altoFila
+  const ordenSuc=['COYOACAN','BUCARELI']
+  const ordenArea=['cocina','barra','salon','sinarea']
+  const bloques=Object.values(grupos).sort((a,b)=>{
+    const sa=ordenSuc.indexOf(a.sucursal),sb=ordenSuc.indexOf(b.sucursal)
+    if(sa!==sb)return (sa<0?99:sa)-(sb<0?99:sb)
+    const aa=ordenArea.indexOf(a.area),ab=ordenArea.indexOf(b.area)
+    return (aa<0?99:aa)-(ab<0?99:ab)
+  })
 
-  for(const r of datos){
+  const anchoEmpleado=320,anchoDia=170,margen=30,altoCabecera=150,altoFila=55
+  const ancho=margen*2+anchoEmpleado+anchoDia*7
+  let alto=altoCabecera+30
+  for(const b of bloques)alto+=55+altoFila+(b.datos.length*altoFila)+25
 
-    const valores=[
-      anchoTextoSvg(r.nombre,38),
-      r.lun,
-      r.mar,
-      r.mie,
-      r.jue,
-      r.vie,
-      r.sab,
-      r.dom
-    ]
+  const rects=[`<rect x="0" y="0" width="${ancho}" height="${alto}" fill="#ffffff"/>`]
+  const textos=[]
 
-    x=x0
+  textos.push(pathTexto('JORNADA SEMANAL',margen,55,30,'#111111'))
+  textos.push(pathTexto(rangoSemanaJornada(),margen,92,20,'#555555'))
+  textos.push(pathTexto(fechaLaboral(),ancho-margen,55,18,'#777777','end'))
 
-    for(let i=0;i<columnas.length;i++){
+  let y=altoCabecera
+  const dias=[['LUN',170],['MAR',170],['MIE',170],['JUE',170],['VIE',170],['SAB',170],['DOM',170]]
 
-      const w=columnas[i][1]
+  for(const bloque of bloques){
+    const tituloArea=bloque.area==='sinarea'?'SIN AREA':nombreAreaJornada(bloque.area)
+    const titulo=bloque.sucursal+(tituloArea?` - ${tituloArea}`:'')
 
-      rects.push(
-        `<rect x="${x}" y="${y}" width="${w}" height="${altoFila}" fill="#ffffff" stroke="#dddddd" stroke-width="1"/>`
-      )
+    rects.push(`<rect x="${margen}" y="${y}" width="${ancho-2*margen}" height="55" fill="#dddddd"/>`)
+    textos.push(pathTexto(titulo,margen+15,y+36,21,'#111111'))
+    y+=55
 
-      textos.push(
-        pathTexto(
-          valores[i],
-          x+w/2,
-          y+35,
-          i===0?15:14,
-          '#111111',
-          'middle'
-        )
-      )
+    const columnas=[['EMPLEADO',anchoEmpleado],...dias]
+    let x=margen
 
+    for(const [tituloCol,w] of columnas){
+      rects.push(`<rect x="${x}" y="${y}" width="${w}" height="${altoFila}" fill="#eeeeee" stroke="#cccccc" stroke-width="1"/>`)
+      textos.push(pathTexto(tituloCol,x+w/2,y+35,17,'#111111','middle'))
       x+=w
     }
 
     y+=altoFila
+
+    for(const r of bloque.datos){
+      const valores=[anchoTextoSvg(r.nombre,38),r.lun,r.mar,r.mie,r.jue,r.vie,r.sab,r.dom]
+      x=margen
+      for(let i=0;i<columnas.length;i++){
+        const w=columnas[i][1]
+        rects.push(`<rect x="${x}" y="${y}" width="${w}" height="${altoFila}" fill="#ffffff" stroke="#dddddd" stroke-width="1"/>`)
+        textos.push(pathTexto(valores[i],x+w/2,y+35,i===0?15:14,'#111111','middle'))
+        x+=w
+      }
+      y+=altoFila
+    }
+    y+=25
   }
 
-  const svg=
-`<svg xmlns="http://www.w3.org/2000/svg" width="${ancho}" height="${alto}" viewBox="0 0 ${ancho} ${alto}">
-${rects.join('\n')}
-${textos.join('\n')}
-</svg>`
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${ancho}" height="${alto}" viewBox="0 0 ${ancho} ${alto}">${rects.join('\n')}${textos.join('\n')}</svg>`
+  const buffer=await sharp(Buffer.from(svg)).png().toBuffer()
 
-  const buffer=await sharp(
-    Buffer.from(svg)
-  ).png().toBuffer()
+  const sufijoSucursal=sucursalFiltro?String(sucursalFiltro).replace(/\s+/g,'_'):'Todas'
+  const sufijoArea=areaFiltro?`_${normalizaArea(areaFiltro)}`:''
+  const sufijoEmpleado=empleadoFiltro?`_${normaliza(empleadoFiltro).replace(/\s+/g,'_')}`:''
+  const fileName=`Jornada_Semanal_${sufijoSucursal}${sufijoArea}${sufijoEmpleado}_${fechaLaboral().replace(/\//g,'-')}.png`
 
-  const sufijoSucursal=sucursalFiltro
-    ?String(sucursalFiltro).replace(/\s+/g,'_')
-    :'Todas'
-
-  const sufijoArea=areaFiltro
-    ?`_${normalizaArea(areaFiltro)}`
-    :''
-
-  const sufijoEmpleado=empleadoFiltro
-    ?`_${normaliza(empleadoFiltro).replace(/\s+/g,'_')}`
-    :''
-
-  const fileName=
-    `Jornada_Semanal_${sufijoSucursal}${sufijoArea}${sufijoEmpleado}_${fechaLaboral().replace(/\//g,'-')}.png`
-
-  const titulo=textoTituloJornada(
-    sucursalFiltro,
-    areaFiltro,
-    empleadoFiltro
-  )
-
-  await sock.sendMessage(
-    jid,
-    {
-      image:buffer,
-      mimetype:'image/png',
-      fileName,
-      caption:`JORNADA SEMANAL
-${titulo}`
-    }
-  )
+  await sock.sendMessage(jid,{
+    image:buffer,
+    mimetype:'image/png',
+    fileName,
+    caption:`JORNADA SEMANAL\n${rangoSemanaJornada()}`
+  })
 }
-
 // =====================================================
 // JORNADA SEMANAL - CARGAR HORARIO BASE
 // =====================================================
