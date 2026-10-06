@@ -8,6 +8,7 @@ import {
 import {
   distM,
   fechaLaboral,
+  diaLaboral,
   horaMX,
   minutos,
   calcularHorasTrabajadas,
@@ -284,8 +285,8 @@ export async function handleChecador({
     const telefono=emp?.telefono||tel||tel10||''
     const telefono10=telefono.replace(/\D/g,'').slice(-10)
 
-    const horarioRows=await getRows('Horario_Base!A2:K')
-    const dia=diaMexico()
+const horarioRows=await getRows('Horario_Base!A2:K')
+const dia=diaLaboral()
 
     let horarioEmp=null
 
@@ -693,9 +694,9 @@ export async function registrarDescansos(){
   registrandoDescansos=true
 
   try{
-    const rows=await getRows('Horario_Base!A2:K')
-    const asistenciaRows=await getRows('Asistencia!A:M')
-    const dia=diaMexico()
+const rows=await getRows('Horario_Base!A2:K')
+const asistenciaRows=await getRows('Asistencia!A:M')
+const dia=diaLaboral()
 
     const client=await sheetsClient()
     const valores=[]
@@ -916,17 +917,31 @@ export async function checkNoLlegaron(sock){
 
       provocando avisos falsos del día anterior.
     */
-    const momento=momentoMexico()
+const fecha=momento.fecha
+const ahora=momento.hora
+const dia=momento.dia
 
-    const fecha=momento.fecha
-    const ahora=momento.hora
-    const dia=momento.dia
+const horaAhora=minutos(ahora)
 
-    const horaAhora=minutos(ahora)
+/*
+  Antes de las 05:00 AM no revisamos
+  los horarios del nuevo día.
 
-    console.log(
-      `🔎 NO LLEGARON | ${fecha} | ${ahora} | día ${dia}`
-    )
+  Esto evita que a las 00:01, 01:00, etc.
+  se generen avisos de personas que realmente
+  descansan ese día o cuya jornada todavía
+  no corresponde al nuevo día.
+*/
+if(horaAhora<5*60){
+  console.log(
+    `🌙 NO LLEGARON | ${fecha} | ${ahora} | revisión pausada antes de las 05:00`
+  )
+  return
+}
+
+console.log(
+  `🔎 NO LLEGARON | ${fecha} | ${ahora} | día ${dia}`
+)
 
     const horarioRows=await getRows('Horario_Base!A2:K')
     const asistenciaRows=await getRows('Asistencia!A:M')
