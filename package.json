@@ -16,7 +16,6 @@
     "pino": "^8.17.2",
     "tesseract.js": "^5.1.1",
     "sharp": "^0.34.3",
-    "opentype.js": "^1.3.4",
-    "@fontsource/dejavu": "^5.2.5"
+    "opentype.js": "^1.3.4"
   }
 }
