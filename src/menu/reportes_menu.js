@@ -1,4 +1,4 @@
-import{getRows}from'../sheets.js'
+import{getRows,sheetsClient}from'../sheets.js'
 import{SPREADSHEET_RECETAS_ID,GRUPO_COYOACAN_ID,GRUPO_BUCARELI_ID,GRUPO_REPORTES_TRINIDAD_ID,GRUPO_PRUEBAS_ID}from'../config.js'
 
 const CONTEXTO_MENU=new Map()
@@ -57,19 +57,103 @@ const esComandoMenu=t=>{
   return /^(receta|recetas|recetario|menu|menú|cotizar|cotizacion|cotización)\b/i.test(n)
 }
 
+/*
+ * LECTURA ROBUSTA DE LAS HOJAS DE RECETAS
+ *
+ * Ya no usamos:
+ * '1_CATALOGO'!A:G
+ * '2_SUBRECETAS'!A:F
+ * etc.
+ *
+ * Se obtiene la información directamente desde la metadata
+ * de Google Sheets y se evita el problema de parseo de rangos.
+ */
+
+async function leerHojaPorNombre(sheets,titulo){
+
+  const r=await sheets.spreadsheets.get({
+    spreadsheetId:SPREADSHEET_RECETAS_ID,
+    includeGridData:true
+  })
+
+  const hoja=r.data.sheets?.find(
+    s=>s.properties?.title===titulo
+  )
+
+  if(!hoja){
+    throw new Error(
+      `No existe la hoja "${titulo}" en el archivo de recetas.`
+    )
+  }
+
+  const bloques=hoja.data||[]
+
+  const filas=[]
+
+  for(const bloque of bloques){
+
+    for(const row of (bloque.rowData||[])){
+
+      const valores=(row.values||[]).map(c=>{
+
+        if(c?.formattedValue!==undefined)
+          return c.formattedValue
+
+        if(c?.effectiveValue?.stringValue!==undefined)
+          return c.effectiveValue.stringValue
+
+        if(c?.effectiveValue?.numberValue!==undefined)
+          return c.effectiveValue.numberValue
+
+        if(c?.effectiveValue?.boolValue!==undefined)
+          return c.effectiveValue.boolValue
+
+        return''
+      })
+
+      filas.push(valores)
+    }
+  }
+
+  return filas
+}
+
 async function cargarRecetas(){
 
-  const[catalogo,subrecetas,rendimientos,platillos,menu]=await Promise.all([
+  const sheets=await sheetsClient()
 
-    getRows('1_CATALOGO!A:G',SPREADSHEET_RECETAS_ID),
+  const[
+    catalogo,
+    subrecetas,
+    rendimientos,
+    platillos,
+    menu
+  ]=await Promise.all([
 
-    getRows('2_SUBRECETAS!A:F',SPREADSHEET_RECETAS_ID),
+    leerHojaPorNombre(
+      sheets,
+      '1_CATALOGO'
+    ),
 
-    getRows('3_RENDIMIENTOS!A:G',SPREADSHEET_RECETAS_ID),
+    leerHojaPorNombre(
+      sheets,
+      '2_SUBRECETAS'
+    ),
 
-    getRows('4_PLATILLOS!A:G',SPREADSHEET_RECETAS_ID),
+    leerHojaPorNombre(
+      sheets,
+      '3_RENDIMIENTOS'
+    ),
 
-    getRows('5_MENU_COSTOS!A:P',SPREADSHEET_RECETAS_ID)
+    leerHojaPorNombre(
+      sheets,
+      '4_PLATILLOS'
+    ),
+
+    leerHojaPorNombre(
+      sheets,
+      '5_MENU_COSTOS'
+    )
 
   ])
 
