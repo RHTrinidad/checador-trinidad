@@ -992,8 +992,9 @@ async function generarImagenJornada(
   empleadoFiltro=''
 ){
 
-  const {default:sharp}=await import('sharp')
+  console.log('🔥 ENTRE A generarImagenJornada - VERSION NUEVA')
 
+  const {default:sharp}=await import('sharp')
   const sucursales=filtroJornada(
     filtroGrupo,
     sucursalFiltro
