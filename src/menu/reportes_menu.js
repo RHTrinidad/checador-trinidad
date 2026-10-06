@@ -141,6 +141,18 @@ const tipoReporte=texto=>{
 
   const n=normaliza(texto)
 
+  /*
+   * IMPORTANTE:
+   * Esta función se utiliza ÚNICAMENTE cuando
+   * contexto.esperandoTipo === true.
+   *
+   * Por lo tanto:
+   *
+   * 1 = Costos
+   * 2 = Descriptivo
+   * 3 = Procesos
+   */
+
   if(
     n==='1'||
     /^costos?$/i.test(n)
@@ -171,6 +183,15 @@ const tipoReporte=texto=>{
 const tipoReporteSubreceta=texto=>{
 
   const n=normaliza(texto)
+
+  /*
+   * IMPORTANTE:
+   * Esta función se utiliza ÚNICAMENTE cuando
+   * contexto.esperandoTipoSubreceta === true.
+   *
+   * 1 = Costos
+   * 2 = Procesos
+   */
 
   if(
     n==='1'||
@@ -219,8 +240,7 @@ const convertirUnidadBase=(cantidad,unidad)=>{
   if([
     'ml',
     'mililitro',
-    'mililitros',
-    'mililitro'
+    'mililitros'
   ].includes(n)){
 
     return{
@@ -243,18 +263,6 @@ const convertirUnidadBase=(cantidad,unidad)=>{
       unidad:'g'
     }
   }
-
-  /*
-   * GR / GRL / G / GRAMO
-   *
-   * Para el sistema:
-   *
-   * 1 kg = 1000 gr
-   * 1 kg = 1000 grl
-   *
-   * Por lo tanto GR y GRL pertenecen
-   * exactamente a la misma unidad base.
-   */
 
   if([
     'g',
@@ -717,9 +725,6 @@ function mapaRendimientos(rows){
 
       costoUnidad:dinero(r[6]),
 
-      /*
-       * Columna H de 3_RENDIMIENTOS
-       */
       proceso:r[7]||''
     })
   }
@@ -807,9 +812,6 @@ function listaNombresSubrecetas(rows){
     if(!n)
       continue
 
-    /*
-     * Todas las subrecetas comienzan con SUB.
-     */
     if(!/^sub\b/.test(n))
       continue
 
@@ -1314,8 +1316,26 @@ async function reporteProcesosSubreceta({
   try{
 
     const{
+      subrecetas,
       rendimientos
     }=await cargarRecetas()
+
+    const filas=
+      obtenerFilasSubreceta(
+        subreceta,
+        subrecetas
+      )
+
+    if(!filas.length){
+
+      await sock.sendMessage(jid,{
+        text:
+          `❌ No encontré "${subreceta}" `+
+          `en 2_SUBRECETAS.`
+      })
+
+      return true
+    }
 
     const rendMap=
       mapaRendimientos(
@@ -1346,6 +1366,8 @@ async function reporteProcesosSubreceta({
         rend.unidad
       )
 
+    let factor=1
+
     let solicitud=null
 
     if(cantidad!==null){
@@ -1370,6 +1392,24 @@ async function reporteProcesosSubreceta({
 
         return true
       }
+
+      if(
+        !unidadBase.cantidad||
+        unidadBase.cantidad<=0
+      ){
+
+        await sock.sendMessage(jid,{
+          text:
+            `❌ El rendimiento de "${subreceta}" `+
+            `no es válido.`
+        })
+
+        return true
+      }
+
+      factor=
+        solicitud.cantidad/
+        unidadBase.cantidad
     }
 
     let texto=
@@ -1392,20 +1432,66 @@ async function reporteProcesosSubreceta({
         `\n📦 SOLICITADO: `+
         `${formatearCantidad(solicitud.cantidad)} `+
         `${solicitud.unidad.toUpperCase()}`
+
+      texto+=
+        `\n🔢 FACTOR DE CONVERSIÓN: `+
+        `${factor.toLocaleString('es-MX',{
+          maximumFractionDigits:4
+        })}`
     }
 
     /*
-     * Columna H de 3_RENDIMIENTOS.
+     * =====================================================
+     * INGREDIENTES
      *
-     * Si existe proceso, se muestra.
-     * Si está vacía, no agregamos ningún
-     * mensaje adicional.
+     * Procesos NO muestra costos.
+     * Sí muestra cantidades.
+     *
+     * Si se solicita una cantidad distinta al rendimiento
+     * base, también se escalan las cantidades.
+     * =====================================================
+     */
+
+    texto+=
+      '\n\nIngredientes:\n'
+
+    for(const r of filas){
+
+      const ingrediente=
+        r[1]||''
+
+      if(!ingrediente)
+        continue
+
+      const cantidadBase=
+        dinero(r[2])
+
+      const cantidadFinal=
+        cantidadBase*factor
+
+      const unidad=
+        r[3]||''
+
+      texto+=
+        `• ${esSubreceta(ingrediente,subrecetas)
+          ?limpiarNombreSubreceta(ingrediente)
+          :ingrediente} — `+
+        `${formatearCantidad(cantidadFinal)} `+
+        `${unidad}\n`
+    }
+
+    /*
+     * =====================================================
+     * PROCEDIMIENTO
+     *
+     * Columna H de 3_RENDIMIENTOS
+     * =====================================================
      */
 
     if(limpiarTexto(rend.proceso)){
 
       texto+=
-        `\n\n👨‍🍳 PROCEDIMIENTO:\n`+
+        `\n👨‍🍳 PROCEDIMIENTO:\n`+
         `${rend.proceso}`
     }
 
@@ -1549,7 +1635,8 @@ async function mostrarCoincidencias({
   jid,
   coincidencias,
   sucursal='',
-  area=''
+  area='',
+  tipoSolicitado=''
 }){
 
   const lista=
@@ -1557,9 +1644,53 @@ async function mostrarCoincidencias({
 
   if(lista.length===1){
 
+    const elegida=
+      lista[0]
+
+    if(tipoSolicitado){
+
+      const tipo=
+        tipoReporte(tipoSolicitado)
+
+      borrarContexto(jid)
+
+      if(tipo==='costos'){
+
+        return await reporteCostos({
+          sock,
+          jid,
+          platillo:elegida,
+          sucursal,
+          area
+        })
+      }
+
+      if(tipo==='descriptivo'){
+
+        return await reporteDescriptivo({
+          sock,
+          jid,
+          platillo:elegida,
+          sucursal,
+          area
+        })
+      }
+
+      if(tipo==='procesos'){
+
+        return await reporteProcesos({
+          sock,
+          jid,
+          platillo:elegida,
+          sucursal,
+          area
+        })
+      }
+    }
+
     guardarContexto(jid,{
 
-      platillo:lista[0],
+      platillo:elegida,
 
       sucursal,
 
@@ -1570,7 +1701,7 @@ async function mostrarCoincidencias({
 
     await sock.sendMessage(jid,{
       text:
-        `🍽️ ${lista[0]}\n\n`+
+        `🍽️ ${elegida}\n\n`+
         `¿Qué reporte quieres?\n\n`+
         `1. Costos\n`+
         `2. Descriptivo\n`+
@@ -1587,6 +1718,8 @@ async function mostrarCoincidencias({
     sucursal,
 
     area,
+
+    tipoSolicitado,
 
     esperandoPlatillo:true
   })
@@ -2059,31 +2192,17 @@ async function reporteDescriptivo({
         `📂 ${etiquetaArea(area)}\n`
     }
 
-    /*
-     * Columna K = DESCRIPTIVO
-     */
-
     if(fila[10]){
 
       texto+=
         `\n${fila[10]}`
     }
 
-    /*
-     * Columna M = FOTO_EMPLATADO
-     */
-
     if(fila[12]){
 
       texto+=
         `\n\n📷 ${fila[12]}`
     }
-
-    /*
-     * Si ambos están vacíos:
-     *
-     * NO agregamos mensaje.
-     */
 
     await sock.sendMessage(jid,{
       text:texto
@@ -2180,19 +2299,11 @@ async function reporteProcesos({
         '• Sin ingredientes registrados.\n'
     }
 
-    /*
-     * Columna L = PROCEDIMIENTO
-     */
-
     if(fila[11]){
 
       texto+=
         `\n👨‍🍳 PROCEDIMIENTO:\n${fila[11]}`
     }
-
-    /*
-     * Columna M = FOTO_EMPLATADO
-     */
 
     if(fila[12]){
 
@@ -2303,15 +2414,18 @@ async function procesarRespuestaContexto({
         })
       }
 
-      return await reporteProcesosSubreceta({
-        sock,
-        jid,
-        subreceta,
-        sucursal:contexto.sucursal||'',
-        cantidad:contexto.cantidad,
-        unidadSolicitud:
-          contexto.unidadSolicitud||''
-      })
+      if(tipo==='procesos'){
+
+        return await reporteProcesosSubreceta({
+          sock,
+          jid,
+          subreceta,
+          sucursal:contexto.sucursal||'',
+          cantidad:contexto.cantidad,
+          unidadSolicitud:
+            contexto.unidadSolicitud||''
+        })
+      }
     }
 
     borrarContexto(jid)
@@ -2347,29 +2461,38 @@ async function procesarRespuestaContexto({
 
   if(contexto.esperandoTipoSubreceta){
 
+    /*
+     * AQUÍ el número solamente puede significar:
+     *
+     * 1 = Costos
+     * 2 = Procesos
+     *
+     * No se interpreta como selección de subreceta.
+     */
+
     const tipo=
       tipoReporteSubreceta(n)
 
     if(!tipo){
 
+      if(
+        n==='3'||
+        /^descript/i.test(n)
+      ){
+
+        await sock.sendMessage(jid,{
+          text:
+            '❌ Las subrecetas solo tienen:\n\n'+
+            '1. Costos\n'+
+            '2. Procesos'
+        })
+
+        return true
+      }
+
       await sock.sendMessage(jid,{
         text:
-          '¿Qué reporte quieres?\n\n'+
-          '1. Costos\n'+
-          '2. Procesos'
-      })
-
-      return true
-    }
-
-    if(
-      n==='3'||
-      /^descript/i.test(n)
-    ){
-
-      await sock.sendMessage(jid,{
-        text:
-          '❌ Las subrecetas solo tienen:\n\n'+
+          '❌ No reconocí el reporte.\n\n'+
           '1. Costos\n'+
           '2. Procesos'
       })
@@ -2576,6 +2699,16 @@ async function procesarRespuestaContexto({
 
   if(contexto.esperandoTipo){
 
+    /*
+     * AQUÍ el número solamente puede significar:
+     *
+     * 1 = Costos
+     * 2 = Descriptivo
+     * 3 = Procesos
+     *
+     * Ya NO se mezcla con la selección del platillo.
+     */
+
     const tipo=
       tipoReporte(n)
 
@@ -2583,7 +2716,7 @@ async function procesarRespuestaContexto({
 
       await sock.sendMessage(jid,{
         text:
-          '¿Qué reporte quieres?\n\n'+
+          '❌ No reconocí el reporte.\n\n'+
           '1. Costos\n'+
           '2. Descriptivo\n'+
           '3. Procesos'
@@ -2682,7 +2815,58 @@ async function procesarRespuestaContexto({
       return true
     }
 
+    /*
+     * Si la solicitud original había sido:
+     *
+     * receta chilaquiles procesos
+     *
+     * y había varias coincidencias,
+     * conservamos el tipo solicitado.
+     */
+
+    const tipoSolicitado=
+      contexto.tipoSolicitado||''
+
     borrarContexto(jid)
+
+    if(tipoSolicitado){
+
+      const tipo=
+        tipoReporte(tipoSolicitado)
+
+      if(tipo==='costos'){
+
+        return await reporteCostos({
+          sock,
+          jid,
+          platillo,
+          sucursal:contexto.sucursal||'',
+          area:contexto.area||''
+        })
+      }
+
+      if(tipo==='descriptivo'){
+
+        return await reporteDescriptivo({
+          sock,
+          jid,
+          platillo,
+          sucursal:contexto.sucursal||'',
+          area:contexto.area||''
+        })
+      }
+
+      if(tipo==='procesos'){
+
+        return await reporteProcesos({
+          sock,
+          jid,
+          platillo,
+          sucursal:contexto.sucursal||'',
+          area:contexto.area||''
+        })
+      }
+    }
 
     guardarContexto(jid,{
 
@@ -2858,15 +3042,17 @@ export async function handleReportesMenu({
    * ======================================================
    * CONTEXTO
    *
-   * IMPORTANTE:
-   * Aquí entran también:
+   * Primero se procesa el contexto.
    *
-   * 9
-   * 1
+   * Esto es lo que permite que:
+   *
+   * receta chilaquiles
+   *       ↓
+   * 7
+   *       ↓
    * 2
-   * 3
    *
-   * siempre que exista contexto pendiente.
+   * funcione correctamente.
    * ======================================================
    */
 
@@ -3083,8 +3269,8 @@ export async function handleReportesMenu({
     }
 
     /*
-     * Si hay varias coincidencias y no se indicó
-     * tipo de reporte, mostramos la lista.
+     * Varias coincidencias y sin tipo:
+     * primero seleccionamos el platillo.
      */
 
     if(
@@ -3102,8 +3288,12 @@ export async function handleReportesMenu({
     }
 
     /*
-     * Si hay varias y ya se indicó tipo,
-     * primero hay que elegir platillo.
+     * Varias coincidencias y con tipo:
+     *
+     * receta chilaquiles procesos
+     *
+     * Primero seleccionamos el platillo.
+     * Después se ejecuta automáticamente procesos.
      */
 
     if(
@@ -3114,34 +3304,14 @@ export async function handleReportesMenu({
       const tipo=
         tipoReporte(tipoTexto)
 
-      await sock.sendMessage(jid,{
-        text:
-          'Encontré varios platillos:\n\n'+
-          coincidencias
-            .slice(0,15)
-            .map(
-              (x,i)=>`${i+1}. ${x}`
-            )
-            .join('\n')+
-          '\n\nEscribe el número o el nombre del que buscas.'
-      })
-
-      guardarContexto(jid,{
-
-        coincidencias:
-          coincidencias.slice(0,15),
-
+      return await mostrarCoincidencias({
+        sock,
+        jid,
+        coincidencias,
         sucursal:suc,
-
         area,
-
-        tipoSolicitado:
-          tipo||'',
-
-        esperandoPlatillo:true
+        tipoSolicitado:tipo
       })
-
-      return true
     }
 
     const elegido=
