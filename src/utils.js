@@ -21,6 +21,29 @@ export function fechaLaboral(d=new Date()){
     })
   )
 
+  export function diaLaboral(d=new Date()){
+  const mx=new Date(
+    d.toLocaleString('en-US',{
+      timeZone:'America/Mexico_City'
+    })
+  )
+
+  /*
+    El día laboral cambia a las 05:00 AM.
+
+    00:00 - 04:59 todavía pertenece
+    al día laboral anterior.
+
+    Ejemplo:
+    Martes 01:30 → lunes laboral
+    Martes 05:00 → martes laboral
+  */
+  if(mx.getHours()<5){
+    mx.setDate(mx.getDate()-1)
+  }
+
+  return mx.getDay()
+}
   /*
     El día laboral cambia a las 05:00 AM.
     Esto permite que una salida, por ejemplo a la 01:00 AM,
@@ -43,10 +66,23 @@ export function getSemanaActual(){
 }
 
 export function horaMX(d=new Date()){
-  return d.toLocaleTimeString('es-MX',{
-    hour12:false,
-    timeZone:'America/Mexico_City'
-  })
+  const partes=new Intl.DateTimeFormat('en-GB',{
+    timeZone:'America/Mexico_City',
+    hour:'2-digit',
+    minute:'2-digit',
+    second:'2-digit',
+    hourCycle:'h23'
+  }).formatToParts(d)
+
+  const datos={}
+
+  for(const p of partes){
+    if(p.type!=='literal'){
+      datos[p.type]=p.value
+    }
+  }
+
+  return `${datos.hour}:${datos.minute}:${datos.second}`
 }
 
 export function minutos(h){
