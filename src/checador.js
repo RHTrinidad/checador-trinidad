@@ -907,46 +907,64 @@ export async function checkNoLlegaron(sock){
   try{
     /*
       IMPORTANTE:
-      fecha, hora y día salen del MISMO instante de México.
+      Antes de las 05:00 no se revisan los horarios del nuevo
+      día calendario.
 
-      Esto evita el problema de medianoche donde antes podía ocurrir:
+      Esto permite conservar los turnos nocturnos:
+      18:00 - 02:00
 
-      fecha = 2026-10-05
-      hora  = 24:00
-      dia   = martes 6
+      Ejemplo:
+      00:01 del 6 de octubre todavía pertenece al día laboral
+      del 5 de octubre para efectos de turnos nocturnos.
 
-      provocando avisos falsos del día anterior.
+      Pero NO debemos revisar los horarios del día 6 todavía.
     */
-const fecha=momento.fecha
-const ahora=momento.hora
-const dia=momento.dia
 
-const horaAhora=minutos(ahora)
+    const ahora=horaMX()
+    const horaAhora=minutos(ahora)
 
-/*
-  Antes de las 05:00 AM no revisamos
-  los horarios del nuevo día.
+    console.log(
+      `🔎 NO LLEGARON | hora ${ahora}`
+    )
 
-  Esto evita que a las 00:01, 01:00, etc.
-  se generen avisos de personas que realmente
-  descansan ese día o cuya jornada todavía
-  no corresponde al nuevo día.
-*/
-if(horaAhora<5*60){
-  console.log(
-    `🌙 NO LLEGARON | ${fecha} | ${ahora} | revisión pausada antes de las 05:00`
-  )
-  return
-}
+    /*
+      De 00:00 a 04:59 no se mandan avisos de "NO HA LLEGADO".
+      A las 05:00 comienza la revisión normal del nuevo día.
+    */
+    if(horaAhora<5*60){
+      console.log(
+        `🌙 No se revisan NO LLEGARON antes de las 05:00 | ${ahora}`
+      )
+      return
+    }
 
-console.log(
-  `🔎 NO LLEGARON | ${fecha} | ${ahora} | día ${dia}`
-)
+    /*
+      A partir de las 05:00 usamos la fecha laboral normal.
+    */
+    const fecha=fechaLaboral()
+
+    /*
+      Obtener el día correspondiente a la fecha laboral.
+      Se calcula a partir de la fecha YYYY-MM-DD para evitar
+      mezclar el día calendario con la fecha laboral.
+    */
+    const [anio,mes,diaNumero]=fecha
+      .split('-')
+      .map(Number)
+
+    const dia=new Date(
+      Date.UTC(anio,mes-1,diaNumero)
+    ).getUTCDay()
+
+    console.log(
+      `🔎 NO LLEGARON | ${fecha} | ${ahora} | día ${dia}`
+    )
 
     const horarioRows=await getRows('Horario_Base!A2:K')
     const asistenciaRows=await getRows('Asistencia!A:M')
 
     for(const r of horarioRows){
+
       const telefono=(r[0]||'')
         .toString()
         .replace(/\D/g,'')
@@ -955,10 +973,6 @@ console.log(
       const nombre=(r[1]||'').toString().trim()
       const sucursal=(r[2]||'').toString().trim()
 
-      /*
-        El horario se toma usando exactamente el mismo día
-        que corresponde a "fecha".
-      */
       const horario=horarioDelDia(r,dia)
 
       if(
@@ -980,8 +994,7 @@ console.log(
       const minProgramada=minutos(programada)
 
       /*
-        Si todavía no llega la hora programada,
-        jamás puede mandar aviso.
+        Todavía no llega la hora programada.
       */
       if(horaAhora<minProgramada){
         continue
@@ -991,14 +1004,17 @@ console.log(
         horaAhora-minProgramada
 
       /*
-        Solamente avisar después de los 20 minutos.
+        Avisar solamente después de 20 minutos.
       */
       if(minutosDesdeEntrada<AVISO_FALTA_MIN){
         continue
       }
 
       const tieneEntrada=asistenciaRows.some(x=>{
-        const fechaRow=(x[2]||'').toString().trim()
+
+        const fechaRow=(x[2]||'')
+          .toString()
+          .trim()
 
         const telRow=(x[0]||'')
           .toString()
@@ -1030,17 +1046,6 @@ console.log(
         continue
       }
 
-      /*
-        Aquí ya sabemos que:
-        - es la fecha correcta
-        - es el día correcto
-        - no es descanso/vacaciones/falta justificada
-        - ya pasaron 20 minutos
-        - no existe entrada
-        - no se ha mandado aviso previamente
-      */
-      const minutosTarde=minutosDesdeEntrada
-
       let grupoAviso=null
 
       const sucId=sucursal
@@ -1053,6 +1058,7 @@ console.log(
         sucId.includes('hotel')
       ){
         grupoAviso=GRUPO_COYOACAN_ID
+
       }else if(
         sucId.includes('bucareli')
       ){
@@ -1082,18 +1088,21 @@ console.log(
         tel:telefono,
         nombre,
         programada,
-        minutosTarde,
+        minutosTarde:minutosDesdeEntrada,
         sucursal,
-        tipo:'NO HA LLEGADO',
-        horaAviso:ahora
+        tipo:'NO HA LLEGADO'
       })
 
       console.log(
-        `⚠️ NO HA LLEGADO | ${fecha} | ${nombre} | ${programada} | ${minutosTarde} min | ${sucursal}`
+        `⚠️ NO HA LLEGADO | ${fecha} | ${nombre} | ${programada} | ${minutosDesdeEntrada} min | ${sucursal}`
       )
     }
+
   }catch(e){
-    console.error('Error revisando no llegados:',e)
+    console.error(
+      'Error revisando no llegados:',
+      e
+    )
   }
 }
 
