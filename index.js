@@ -212,23 +212,22 @@ async function conectar(){
             PAGOS
           */
 
-          if(
-            (tipoGrupo==='REPORTES'||
-             tipoGrupo==='GERENTES'||
-             tipoGrupo==='COMPRAS')&&
-            esImagen
-          ){
+if(
+  (tipoGrupo==='REPORTES'||
+   tipoGrupo==='GERENTES')&&
+  /^(receta|recetas|recetario|menu|menú|cotizar|cotizacion|cotización)\b/i.test(texto)
+){
 
-            const esPago=await handlePagos({
-              sock,
-              jid,
-              m,
-              texto,
-              esImagen
-            })
+  const atendido=await handleReportesMenu({
+    sock,
+    jid,
+    m,
+    texto,
+    tipoGrupo
+  })
 
-            if(esPago)continue
-          }
+  if(atendido)continue
+}
 
           /*
             COMPRAS
