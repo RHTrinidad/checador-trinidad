@@ -1580,6 +1580,92 @@ ${titulo}`
     }
   )
 }
+  await sock.sendMessage(
+    jid,
+    {
+      image:buffer,
+      mimetype:'image/png',
+      fileName,
+      caption:
+`JORNADA SEMANAL
+${titulo}`
+    }
+  )
+}
+
+// =====================================================
+// JORNADA SEMANAL - CARGAR HORARIO BASE
+// =====================================================
+
+async function jornadaSemanal(
+  filtroGrupo,
+  jid,
+  sock,
+  sucursalFiltro='',
+  areaFiltro='',
+  empleadoFiltro=''
+){
+
+  console.log('================================')
+  console.log('🚀 INICIANDO JORNADA SEMANAL')
+  console.log('GRUPO:', filtroGrupo)
+  console.log('SUCURSAL:', sucursalFiltro||'TODAS')
+  console.log('AREA:', areaFiltro||'TODAS')
+  console.log('EMPLEADO:', empleadoFiltro||'TODOS')
+  console.log('================================')
+
+  try{
+
+    const filas=
+      await getRows(
+        'Horario_Base!A2:K'
+      )
+
+    console.log(
+      'FILAS HORARIO_BASE:',
+      filas.length
+    )
+
+    if(!filas.length){
+
+      await sock.sendMessage(
+        jid,
+        {
+          text:
+            'No hay empleados registrados en Horario_Base.'
+        }
+      )
+
+      return
+    }
+
+    await generarImagenJornada(
+      filas,
+      filtroGrupo,
+      jid,
+      sock,
+      sucursalFiltro,
+      areaFiltro,
+      empleadoFiltro
+    )
+
+  }catch(error){
+
+    console.error(
+      'ERROR EN jornadaSemanal:',
+      error
+    )
+
+    await sock.sendMessage(
+      jid,
+      {
+        text:
+          'No se pudo generar la jornada semanal. Revisa los logs de Railway.'
+      }
+    )
+  }
+}
+
 // =====================================================
 // BUSCAR EMPLEADO
 // =====================================================
