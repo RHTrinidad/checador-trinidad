@@ -29,6 +29,7 @@ const textoMensaje=m=>(
 
 const obtenerLoc=m=>{
   const x=m.message?.locationMessage
+
   return x
     ?{
         degreesLatitude:x.degreesLatitude,
@@ -79,21 +80,33 @@ async function procesos(){
   if(!sesion.sock||!sesion.conectado)return
 
   try{
+
     await registrarDescansos()
+
   }catch(e){
+
     console.error('Descansos:',e)
+
   }
 
   try{
+
     await cerrarSalidasPendientes()
+
   }catch(e){
+
     console.error('Cierres:',e)
+
   }
 
   try{
+
     await checkNoLlegaron(sesion.sock)
+
   }catch(e){
+
     console.error('No llegados:',e)
+
   }
 }
 
@@ -147,6 +160,7 @@ async function conectar(){
           console.log('ESCANEA ESTE QR:')
 
           qrcode.generate(qr,{small:true})
+
         }
 
         if(connection==='open'){
@@ -157,6 +171,7 @@ async function conectar(){
           iniciando=false
 
           await procesos()
+
         }
 
         if(connection==='close'){
@@ -186,6 +201,7 @@ async function conectar(){
             console.error(
               'Sesion cerrada / logout. Se requiere volver a vincular.'
             )
+
           }
         }
       }
@@ -290,6 +306,7 @@ async function conectar(){
                   tel10:identidad.tel10,
                   tel:identidad.tel
                 })
+
               }
 
               continue
@@ -297,12 +314,31 @@ async function conectar(){
 
             /*
               MENÚ / RECETAS
+
+              IMPORTANTE:
+              Se llama para TODOS los mensajes de REPORTES y GERENTES,
+              no solamente cuando empiezan con "receta".
+
+              Esto permite que respuestas de contexto como:
+
+              1
+              2
+              3
+              7
+              chilaquiles costilla
+              costos
+              descriptivo
+              procesos
+
+              lleguen a reportes_menu.js.
+
+              Si no existe contexto activo, handleReportesMenu()
+              devuelve false y el mensaje continúa al resto de módulos.
             */
 
             if(
-              (tipoGrupo==='REPORTES'||
-               tipoGrupo==='GERENTES')&&
-              /^(receta|recetas|recetario|menu|menú|cotizar|cotizacion|cotización)\b/i.test(texto)
+              tipoGrupo==='REPORTES'||
+              tipoGrupo==='GERENTES'
             ){
 
               const atendido=
@@ -405,6 +441,7 @@ async function conectar(){
               'Error procesando mensaje:',
               e
             )
+
           }
         }
       }
