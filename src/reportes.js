@@ -11,10 +11,6 @@ const DIAS_RETARDOS=30
 const DIAS_CRITICOS=45
 const CUTOFF_RETARDOS='2026-10-02'
 
-// =====================================================
-// CATÁLOGO CENTRAL DE REPORTES
-// =====================================================
-
 const CATALOGO_REPORTES=[
 {comando:'info [nombre]',descripcion:'Datos generales del empleado',grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']},
 {comando:'datos [nombre]',descripcion:'Datos generales del empleado',grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']},
@@ -127,15 +123,7 @@ function esLibreHorario(v){
 }
 
 function getHorarioDia(row,dia){
-  const mapa={
-    1:row?.[3],
-    2:row?.[4],
-    3:row?.[5],
-    4:row?.[6],
-    5:row?.[7],
-    6:row?.[8],
-    0:row?.[9]
-  }
+  const mapa={1:row?.[3],2:row?.[4],3:row?.[5],4:row?.[6],5:row?.[7],6:row?.[8],0:row?.[9]}
   return (mapa[dia]||'').toString().trim()
 }
 
@@ -178,11 +166,7 @@ function sucursalCoincideAsignada(suc,filtro){
   const x=normaliza(suc)
   const f=normaliza(filtro)
   if(!f)return true
-
-  if(f==='coyoacan'||f==='coyoacan hotel'||f==='hotel'){
-    return x.includes('coyo')||x.includes('hotel')||x.includes('trinidad')
-  }
-
+  if(f==='coyoacan'||f==='coyoacan hotel'||f==='hotel')return x.includes('coyo')||x.includes('hotel')||x.includes('trinidad')
   if(f==='bucareli')return x.includes('bucareli')
   return x.includes(f)
 }
@@ -191,20 +175,12 @@ async function cargarDatos(){
   const sClient=await sheetsClient()
 
   const [asis,emp,base]=await Promise.all([
-    sClient.spreadsheets.values.get({
-      spreadsheetId:SPREADSHEET_ID,
-      range:'Asistencia!A2:M'
-    }),
+    sClient.spreadsheets.values.get({spreadsheetId:SPREADSHEET_ID,range:'Asistencia!A2:M'}),
     getRows('Empleados!A:T'),
     getRows('Horario_Base!A2:K')
   ])
 
-  return {
-    sClient,
-    asis:asis.data.values||[],
-    emp,
-    base
-  }
+  return {sClient,asis:asis.data.values||[],emp,base}
 }
 
 function mapaEmpleados(empRows){
@@ -233,15 +209,12 @@ export async function asistenciaHoy(filtroSucursal,jid,sock){
   const {asis,base}=await cargarDatos()
   const fLab=fechaLaboral()
   const ahoraMin=minutos(horaMX())
-
   const mx=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}))
   const diaNum=mx.getDay()
-
   const llego=[],retardo=[],falta=[],futuro=[],descanso=[]
 
   for(const r of base){
     const sucBase=(r[2]||'').toString()
-
     if(!sucursalCoincideAsignada(sucBase,filtroSucursal))continue
 
     const nombre=r[1]||''
@@ -261,12 +234,8 @@ export async function asistenciaHoy(filtroSucursal,jid,sock){
 
     if(parsed.entrada==='LIBRE'){
       const registro=asis.find(a=>tel10(a[0])===tel&&a[2]===fLab&&a[3])
-
-      if(registro){
-        llego.push(`• ${nombre} - [${sucBase}] - Entró ${registro[3]} en ${registro[6]||'-'} ✅`)
-      }else{
-        futuro.push(`• ${nombre} - [${sucBase}] - LIBRE`)
-      }
+      if(registro)llego.push(`• ${nombre} - [${sucBase}] - Entró ${registro[3]} en ${registro[6]||'-'} ✅`)
+      else futuro.push(`• ${nombre} - [${sucBase}] - LIBRE`)
       continue
     }
 
@@ -285,12 +254,8 @@ export async function asistenciaHoy(filtroSucursal,jid,sock){
       }
     }else{
       const dif=ahoraMin-minutos(parsed.entrada)
-
-      if(dif<0){
-        futuro.push(`• ${nombre} - [${sucBase}] - Prog ${parsed.entrada}`)
-      }else{
-        falta.push(`• ${nombre} - [${sucBase}] - Prog ${parsed.entrada} - ❌ ${dif}m sin llegar`)
-      }
+      if(dif<0)futuro.push(`• ${nombre} - [${sucBase}] - Prog ${parsed.entrada}`)
+      else falta.push(`• ${nombre} - [${sucBase}] - Prog ${parsed.entrada} - ❌ ${dif}m sin llegar`)
     }
   }
 
@@ -320,12 +285,7 @@ ${descanso.join('\n')||'-'}`
 // =====================================================
 
 function escaparSvg(v){
-  return String(v??'')
-    .replace(/&/g,'&amp;')
-    .replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;')
-    .replace(/'/g,'&apos;')
+  return String(v??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;')
 }
 
 function abreviarHorario(v){
@@ -338,13 +298,8 @@ function abreviarHorario(v){
 
 function filtroJornada(filtroGrupo,sucursalFiltro=''){
   const f=normaliza(sucursalFiltro||filtroGrupo)
-
   if(f.includes('bucareli'))return ['bucareli']
-
-  if(f.includes('coyoacan')||f.includes('hotel')||f.includes('trinidad')){
-    return ['coyoacan','hotel']
-  }
-
+  if(f.includes('coyoacan')||f.includes('hotel')||f.includes('trinidad'))return ['coyoacan','hotel']
   return ['coyoacan','hotel','bucareli']
 }
 
@@ -354,11 +309,9 @@ function jornadaCoincideSucursal(sucursal,sucursales){
 
   return sucursales.some(s=>{
     const f=normaliza(s)
-
     if(f==='coyoacan')return x.includes('coyo')||x.includes('trinidad')
     if(f==='hotel')return x.includes('hotel')
     if(f==='bucareli')return x.includes('bucareli')
-
     return x.includes(f)
   })
 }
@@ -386,34 +339,24 @@ function nombreAreaJornada(area){
 
 function jornadaCoincideEmpleado(nombre,empleadoFiltro){
   if(!empleadoFiltro)return true
-
   const n=normaliza(nombre)
   const f=normaliza(empleadoFiltro)
-
   if(!n||!f)return false
   return n.includes(f)
 }
 
 function obtenerFiltrosJornada(texto,filtroGrupo){
   const low=normaliza(texto)
-
   let sucursal=''
   let area=''
   let empleado=''
 
-  if(low.includes('bucareli')){
-    sucursal='bucareli'
-  }else if(low.includes('coyoacan')||low.includes('hotel')||low.includes('trinidad')){
-    sucursal='coyoacan'
-  }
+  if(low.includes('bucareli'))sucursal='bucareli'
+  else if(low.includes('coyoacan')||low.includes('hotel')||low.includes('trinidad'))sucursal='coyoacan'
 
-  if(low.includes('cocina')){
-    area='cocina'
-  }else if(low.includes('barra')){
-    area='barra'
-  }else if(low.includes('salon')){
-    area='salon'
-  }
+  if(low.includes('cocina'))area='cocina'
+  else if(low.includes('barra'))area='barra'
+  else if(low.includes('salon'))area='salon'
 
   let resto=low
 
@@ -432,12 +375,8 @@ function obtenerFiltrosJornada(texto,filtroGrupo){
 
   if(!sucursal){
     const grupo=normaliza(filtroGrupo)
-
-    if(grupo==='bucareli'){
-      sucursal='bucareli'
-    }else if(grupo==='coyoacan'||grupo==='coyoacan hotel'||grupo==='hotel'){
-      sucursal='coyoacan'
-    }
+    if(grupo==='bucareli')sucursal='bucareli'
+    else if(grupo==='coyoacan'||grupo==='coyoacan hotel'||grupo==='hotel')sucursal='coyoacan'
   }
 
   return {sucursal,area,empleado}
@@ -445,19 +384,13 @@ function obtenerFiltrosJornada(texto,filtroGrupo){
 
 function textoTituloJornada(sucursal,area,empleado=''){
   let titulo=''
-
-  if(sucursal==='bucareli'){
-    titulo='BUCARELI'
-  }else if(sucursal==='coyoacan'){
-    titulo='COYOACAN / HOTEL'
-  }else{
-    titulo='TODAS LAS SUCURSALES'
-  }
+  if(sucursal==='bucareli')titulo='BUCARELI'
+  else if(sucursal==='coyoacan')titulo='COYOACAN / HOTEL'
+  else titulo='TODAS LAS SUCURSALES'
 
   const a=nombreAreaJornada(area)
   if(a)titulo+=` - ${a}`
   if(empleado)titulo+=` - ${empleado.toUpperCase()}`
-
   return titulo
 }
 
@@ -506,10 +439,7 @@ async function generarImagenJornada(
 
   const {default:sharp}=await import('sharp')
 
-  const sucursales=filtroJornada(
-    filtroGrupo,
-    sucursalFiltro
-  )
+  const sucursales=filtroJornada(filtroGrupo,sucursalFiltro)
 
   const datos=filas
     .filter(r=>jornadaCoincideSucursal(r[2],sucursales))
@@ -531,9 +461,7 @@ async function generarImagenJornada(
     .sort((a,b)=>normaliza(a.nombre).localeCompare(normaliza(b.nombre)))
 
   if(!datos.length){
-    await sock.sendMessage(jid,{
-      text:'No se encontraron empleados para la jornada solicitada.'
-    })
+    await sock.sendMessage(jid,{text:'No se encontraron empleados para la jornada solicitada.'})
     return
   }
 
@@ -544,7 +472,6 @@ async function generarImagenJornada(
 
     function recorrer(actual){
       let items=[]
-
       try{
         items=fs.readdirSync(actual,{withFileTypes:true})
       }catch{
@@ -561,11 +488,7 @@ async function generarImagenJornada(
 
         const nombre=item.name.toLowerCase()
 
-        if(
-          nombre.endsWith('.ttf')||
-          nombre.endsWith('.otf')||
-          nombre.endsWith('.woff')
-        ){
+        if(nombre.endsWith('.ttf')||nombre.endsWith('.otf')||nombre.endsWith('.woff')){
           encontrados.push(full)
         }
       }
@@ -588,15 +511,16 @@ async function generarImagenJornada(
     process.cwd(),
     'node_modules',
     '@fontsource',
-    'dejavu'
+    'roboto'
   )
 
   const fontPath=buscarFuente(fontDir)
 
   if(!fontPath){
     console.error('NO SE ENCONTRO FUENTE TTF/OTF EN:',fontDir)
+
     throw new Error(
-      'No se encontró una fuente TTF/OTF compatible en @fontsource/dejavu'
+      'No se encontró una fuente TTF/OTF compatible en @fontsource/roboto'
     )
   }
 
@@ -618,43 +542,19 @@ async function generarImagenJornada(
     )
   }
 
-  function pathTexto(
-    texto,
-    x,
-    y,
-    size,
-    fill='#111111',
-    anchor='start'
-  ){
-    const s=String(texto??'')
-      .replace(/\r/g,'')
-      .replace(/\n/g,' ')
-
+  function pathTexto(texto,x,y,size,fill='#111111',anchor='start'){
+    const s=String(texto??'').replace(/\r/g,'').replace(/\n/g,' ')
     if(!s)return ''
 
     let xReal=x
 
     try{
-      const ancho=font.getAdvanceWidth(
-        s,
-        size,
-        {kerning:true}
-      )
+      const ancho=font.getAdvanceWidth(s,size,{kerning:true})
 
-      if(anchor==='middle'){
-        xReal=x-ancho/2
-      }else if(anchor==='end'){
-        xReal=x-ancho
-      }
+      if(anchor==='middle')xReal=x-ancho/2
+      else if(anchor==='end')xReal=x-ancho
 
-      const glyphPath=font.getPath(
-        s,
-        xReal,
-        y,
-        size,
-        {kerning:true}
-      )
-
+      const glyphPath=font.getPath(s,xReal,y,size,{kerning:true})
       const d=glyphPath.toPathData(3)
 
       if(!d)return ''
@@ -662,11 +562,7 @@ async function generarImagenJornada(
       return `<path d="${d}" fill="${fill}"/>`
 
     }catch(error){
-      console.error(
-        'ERROR GENERANDO TEXTO COMO PATH:',
-        s,
-        error
-      )
+      console.error('ERROR GENERANDO TEXTO COMO PATH:',s,error)
       return ''
     }
   }
@@ -881,9 +777,7 @@ async function jornadaSemanal(
 
   try{
 
-    const filas=await getRows(
-      'Horario_Base!A2:K'
-    )
+    const filas=await getRows('Horario_Base!A2:K')
 
     console.log(
       'FILAS HORARIO_BASE:',
@@ -927,7 +821,6 @@ async function jornadaSemanal(
 async function buscarEmpleado(nombreBuscar,filtroGrupo=null){
 
   const empRows=await getRows('Empleados!A:T')
-
   const buscar=normaliza(nombreBuscar)
   const candidatos=[]
 
@@ -1318,24 +1211,17 @@ export async function generarExcelEmpleado(
   const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
 
   const filtradas=filas.filter(f=>{
-
     if(!normaliza(f[1]||'').includes(buscar))return false
-
     const fe=parseFechaMX(f[2])
-
     return fe&&fe>=lunes&&fe<=domingo
   })
 
   const wb=new ExcelJS.Workbook()
-
   const ws=wb.addWorksheet('Resumen')
 
   ws.addRow([
     `REPORTE ${buscar.toUpperCase()} - ${tipo.toUpperCase()}`
-  ]).font={
-    bold:true,
-    size:14
-  }
+  ]).font={bold:true,size:14}
 
   ws.addRow([rangoTxt])
   ws.addRow([])
@@ -1474,9 +1360,7 @@ export async function generarExcelEmpleado(
     }
   )
 
-  try{
-    fs.unlinkSync(fp)
-  }catch{}
+  try{fs.unlinkSync(fp)}catch{}
 }
 
 // =====================================================
@@ -1752,10 +1636,7 @@ export async function generarExcelSemanaYEnviar(
 
   ws.addRow([
     `REPORTE ${String(filtroSucursal).toUpperCase()} - ${tipo}`
-  ]).font={
-    bold:true,
-    size:14
-  }
+  ]).font={bold:true,size:14}
 
   ws.addRow([rangoTxt])
   ws.addRow([])
@@ -1845,9 +1726,7 @@ export async function generarExcelSemanaYEnviar(
     }
   )
 
-  try{
-    fs.unlinkSync(fp)
-  }catch{}
+  try{fs.unlinkSync(fp)}catch{}
 }
 
 // =====================================================
@@ -1881,7 +1760,6 @@ async function analizar45Dias(filtroSucursal){
     const suc=r[2]||''
 
     if(!tel)continue
-
     if(!sucursalCoincideAsignada(suc,filtroSucursal))continue
 
     const nombre=r[1]||tel
@@ -2109,10 +1987,6 @@ export async function handleReportes({
 
   const low=normaliza(texto)
 
-  // ================================================
-  // LISTA DE REPORTES
-  // ================================================
-
   if(low==='lista de reportes'){
 
     await sock.sendMessage(jid,{
@@ -2121,10 +1995,6 @@ export async function handleReportes({
 
     return true
   }
-
-  // ================================================
-  // REPORTES SOLOS NO HACEN NADA
-  // ================================================
 
   if(low==='reportes'||low==='reporte'){
     return false
@@ -2143,14 +2013,8 @@ export async function handleReportes({
 
     const filtros=obtenerFiltrosJornada(
       texto
-        .replace(
-          /^jornada\s+semanal\s*/i,
-          ''
-        )
-        .replace(
-          /^jornada\s*/i,
-          ''
-        )
+        .replace(/^jornada\s+semanal\s*/i,'')
+        .replace(/^jornada\s*/i,'')
         .trim(),
       filtroGrupo
     )
