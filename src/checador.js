@@ -64,6 +64,50 @@ function diaMexico(){
     new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'})
   ).getDay()
 }
+function momentoMexico(){
+  const partes=new Intl.DateTimeFormat('en-CA',{
+    timeZone:'America/Mexico_City',
+    year:'numeric',
+    month:'2-digit',
+    day:'2-digit',
+    weekday:'short',
+    hour:'2-digit',
+    minute:'2-digit',
+    second:'2-digit',
+    hourCycle:'h23'
+  }).formatToParts(new Date())
+
+  const datos={}
+
+  for(const p of partes){
+    if(p.type!=='literal'){
+      datos[p.type]=p.value
+    }
+  }
+
+  const mapaDias={
+    Sun:0,
+    Mon:1,
+    Tue:2,
+    Wed:3,
+    Thu:4,
+    Fri:5,
+    Sat:6
+  }
+
+  let hora=datos.hour||'00'
+
+  // Protección adicional por si algún entorno devuelve 24
+  if(hora==='24'){
+    hora='00'
+  }
+
+  return {
+    fecha:`${datos.year}-${datos.month}-${datos.day}`,
+    hora:`${hora}:${datos.minute}:${datos.second}`,
+    dia:mapaDias[datos.weekday]
+  }
+}
 
 function horarioDelDia(r,dia){
   const mapa={
@@ -860,13 +904,32 @@ export async function cerrarSalidasPendientes(){
 
 export async function checkNoLlegaron(sock){
   try{
-    const fecha=fechaLaboral()
-    const ahora=horaMX()
+    /*
+      IMPORTANTE:
+      fecha, hora y día salen del MISMO instante de México.
+
+      Esto evita el problema de medianoche donde antes podía ocurrir:
+
+      fecha = 2026-10-05
+      hora  = 24:00
+      dia   = martes 6
+
+      provocando avisos falsos del día anterior.
+    */
+    const momento=momentoMexico()
+
+    const fecha=momento.fecha
+    const ahora=momento.hora
+    const dia=momento.dia
+
     const horaAhora=minutos(ahora)
+
+    console.log(
+      `🔎 NO LLEGARON | ${fecha} | ${ahora} | día ${dia}`
+    )
 
     const horarioRows=await getRows('Horario_Base!A2:K')
     const asistenciaRows=await getRows('Asistencia!A:M')
-    const dia=diaMexico()
 
     for(const r of horarioRows){
       const telefono=(r[0]||'')
@@ -876,6 +939,11 @@ export async function checkNoLlegaron(sock){
 
       const nombre=(r[1]||'').toString().trim()
       const sucursal=(r[2]||'').toString().trim()
+
+      /*
+        El horario se toma usando exactamente el mismo día
+        que corresponde a "fecha".
+      */
       const horario=horarioDelDia(r,dia)
 
       if(
@@ -883,7 +951,9 @@ export async function checkNoLlegaron(sock){
         !nombre||
         !horario||
         esIncidenciaHorario(horario)
-      )continue
+      ){
+        continue
+      }
 
       const partes=horario.match(
         /(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/
@@ -894,10 +964,27 @@ export async function checkNoLlegaron(sock){
       const programada=partes[1]
       const minProgramada=minutos(programada)
 
-      if(horaAhora-minProgramada<AVISO_FALTA_MIN)continue
+      /*
+        Si todavía no llega la hora programada,
+        jamás puede mandar aviso.
+      */
+      if(horaAhora<minProgramada){
+        continue
+      }
+
+      const minutosDesdeEntrada=
+        horaAhora-minProgramada
+
+      /*
+        Solamente avisar después de los 20 minutos.
+      */
+      if(minutosDesdeEntrada<AVISO_FALTA_MIN){
+        continue
+      }
 
       const tieneEntrada=asistenciaRows.some(x=>{
         const fechaRow=(x[2]||'').toString().trim()
+
         const telRow=(x[0]||'')
           .toString()
           .replace(/\D/g,'')
@@ -907,12 +994,16 @@ export async function checkNoLlegaron(sock){
           .toString()
           .trim()
 
-        return fechaRow===fecha&&
+        return (
+          fechaRow===fecha&&
           telRow===telefono&&
           !!horaEntrada
+        )
       })
 
-      if(tieneEntrada)continue
+      if(tieneEntrada){
+        continue
+      }
 
       const yaAviso=await avisoYaRegistrado(
         telefono,
@@ -920,9 +1011,20 @@ export async function checkNoLlegaron(sock){
         'NO HA LLEGADO'
       )
 
-      if(yaAviso)continue
+      if(yaAviso){
+        continue
+      }
 
-      const minutosTarde=horaAhora-minProgramada
+      /*
+        Aquí ya sabemos que:
+        - es la fecha correcta
+        - es el día correcto
+        - no es descanso/vacaciones/falta justificada
+        - ya pasaron 20 minutos
+        - no existe entrada
+        - no se ha mandado aviso previamente
+      */
+      const minutosTarde=minutosDesdeEntrada
 
       let grupoAviso=null
 
@@ -967,8 +1069,13 @@ export async function checkNoLlegaron(sock){
         programada,
         minutosTarde,
         sucursal,
-        tipo:'NO HA LLEGADO'
+        tipo:'NO HA LLEGADO',
+        horaAviso:ahora
       })
+
+      console.log(
+        `⚠️ NO HA LLEGADO | ${fecha} | ${nombre} | ${programada} | ${minutosTarde} min | ${sucursal}`
+      )
     }
   }catch(e){
     console.error('Error revisando no llegados:',e)
