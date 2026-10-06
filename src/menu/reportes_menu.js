@@ -1,67 +1,131 @@
-import {getRows}from'../sheets.js'
-import {SPREADSHEET_RECETAS_ID}from'../config.js'
+import{getRows}from'../sheets.js'
+import{SPREADSHEET_RECETAS_ID,GRUPO_COYOACAN_ID,GRUPO_BUCARELI_ID,GRUPO_REPORTES_TRINIDAD_ID,GRUPO_PRUEBAS_ID}from'../config.js'
 
 const CONTEXTO_MENU=new Map()
 
 const limpiarTexto=x=>(x||'').toString().trim().replace(/\s+/g,' ')
-
 const normaliza=x=>limpiarTexto(x).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()
-
-const dinero=x=>{
-  const n=parseFloat((x||'').toString().replace(/[$,%\s,]/g,''))
-  return Number.isFinite(n)?n:0
-}
-
+const dinero=x=>{const n=parseFloat((x||'').toString().replace(/[$,%\s,]/g,''));return Number.isFinite(n)?n:0}
 const moneda=x=>`$${Number(x||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2})}`
 
-const esComandoMenu=t=>{
-  const x=normaliza(t)
-  return /^(receta|recetas|cotizar|cotizacion)\b/i.test(x)
-}
-
-const guardarContexto=(jid,datos)=>{
-  CONTEXTO_MENU.set(jid,{...datos,expira:Date.now()+60000})
-}
-
+const guardarContexto=(jid,datos)=>CONTEXTO_MENU.set(jid,{...datos,expira:Date.now()+60000})
 const obtenerContexto=jid=>{
   const x=CONTEXTO_MENU.get(jid)
   if(!x)return null
-  if(Date.now()>x.expira){
-    CONTEXTO_MENU.delete(jid)
-    return null
-  }
+  if(Date.now()>x.expira){CONTEXTO_MENU.delete(jid);return null}
   return x
 }
-
 const borrarContexto=jid=>CONTEXTO_MENU.delete(jid)
 
+const esReporteGeneral=jid=>jid===GRUPO_REPORTES_TRINIDAD_ID||jid===GRUPO_PRUEBAS_ID
+const sucursalGrupo=jid=>{
+  if(jid===GRUPO_BUCARELI_ID)return'bucareli'
+  if(jid===GRUPO_COYOACAN_ID)return'coyoacan'
+  return''
+}
+
+const nombreSucursal=x=>{
+  const n=normaliza(x)
+  if(n.includes('coyoacan'))return'coyoacan'
+  if(n.includes('bucareli'))return'bucareli'
+  return''
+}
+
+const nombreArea=x=>{
+  const n=normaliza(x)
+  if(n.includes('cocina'))return'cocina'
+  if(n.includes('barra'))return'barra'
+  return''
+}
+
+const etiquetaSucursal=x=>normaliza(x)==='coyoacan'?'Coyoacán':'Bucareli'
+const etiquetaArea=x=>normaliza(x)==='cocina'?'COCINA':'BARRA'
+
+const esComandoMenu=t=>{
+  const n=normaliza(t)
+  return /^(receta|recetas|recetario|menu|menú|cotizar|cotizacion|cotización)\b/i.test(n)
+}
+
 async function cargarRecetas(){
-  const [catalogo,subrecetas,rendimientos,platillos,menu]=await Promise.all([
+  const[catalogo,subrecetas,rendimientos,platillos,menu]=await Promise.all([
     getRows('CATALOGO!A:G',SPREADSHEET_RECETAS_ID),
     getRows('2_SUBRECETAS!A:F',SPREADSHEET_RECETAS_ID),
     getRows('3_RENDIMIENTOS!A:G',SPREADSHEET_RECETAS_ID),
     getRows('4_PLATILLOS!A:G',SPREADSHEET_RECETAS_ID),
     getRows('5_MENU_COSTOS!A:P',SPREADSHEET_RECETAS_ID)
   ])
-
   return{catalogo,subrecetas,rendimientos,platillos,menu}
+}
+
+function activo(x){
+  const n=normaliza(x)
+  return !x||['si','sí','activo','activa','1','true','verdadero','yes'].includes(n)
+}
+
+function filaMenuCoincideSucursal(r,sucursal){
+  if(!sucursal)return true
+  const n=normaliza(r[1])
+  return n.includes(sucursal)||n.includes('ambos')||n.includes('coyoacan y bucareli')||n.includes('bucareli y coyoacan')
+}
+
+function filasMenu(menu,sucursal='',area=''){
+  return menu.slice(1).filter(r=>{
+    if(!normaliza(r[0]))return false
+    if(!activo(r[4]))return false
+    if(!filaMenuCoincideSucursal(r,sucursal))return false
+    if(area&&normaliza(r[2])!==area)return false
+    return true
+  })
+}
+
+function buscarPlatillos(nombre,menu,platillos,sucursal='',area=''){
+  const n=normaliza(nombre)
+  const lista=filasMenu(menu,sucursal,area)
+  const nombres=new Map()
+
+  for(const r of lista){
+    const p=normaliza(r[0])
+    if(p)nombres.set(p,r[0])
+  }
+
+  for(const r of platillos.slice(1)){
+    const p=normaliza(r[0])
+    if(p&&!nombres.has(p))nombres.set(p,r[0])
+  }
+
+  const exactos=[]
+  const similares=[]
+
+  for(const[nombreNormal,nombreReal]of nombres){
+    if(nombreNormal===n)exactos.push(nombreReal)
+    else if(nombreNormal.replace(/\s+/g,'')===n.replace(/\s+/g,''))exactos.push(nombreReal)
+    else if(nombreNormal.includes(n)||n.includes(nombreNormal)){
+      similares.push(nombreReal)
+    }else{
+      const palabras=n.split(' ').filter(Boolean)
+      if(palabras.length>1&&palabras.every(w=>nombreNormal.includes(w)))
+        similares.push(nombreReal)
+    }
+  }
+
+  return [...new Set([...exactos,...similares])]
 }
 
 function buscarPlatillo(nombre,rows){
   const n=normaliza(nombre)
-
-  return rows.slice(1).find(r=>normaliza(r[0])===n)||
-         rows.slice(1).find(r=>normaliza(r[0]).includes(n))||
-         rows.slice(1).find(r=>n.includes(normaliza(r[0])))
+  const datos=rows.slice(1).filter(r=>normaliza(r[0]))
+  return datos.find(r=>normaliza(r[0])===n)||
+         datos.find(r=>normaliza(r[0]).replace(/\s+/g,'')===n.replace(/\s+/g,''))||
+         datos.find(r=>normaliza(r[0]).includes(n))||
+         datos.find(r=>n.includes(normaliza(r[0])))||
+         null
 }
 
 function mapaCatalogo(rows){
   const map=new Map()
-
   for(const r of rows.slice(1)){
     const nombre=normaliza(r[0])
     if(!nombre)continue
-
     map.set(nombre,{
       nombre:r[0]||'',
       unidad:r[1]||'',
@@ -69,32 +133,25 @@ function mapaCatalogo(rows){
       alergico:r[6]||''
     })
   }
-
   return map
 }
 
 function mapaRendimientos(rows){
   const map=new Map()
-
   for(const r of rows.slice(1)){
     const sub=normaliza(r[0])
-    const suc=normaliza(r[3])
-
     if(!sub)continue
-
     if(!map.has(sub))map.set(sub,[])
     map.get(sub).push({
       subreceta:r[0]||'',
-      rendimiento:parseFloat(r[1])||0,
+      rendimiento:dinero(r[1]),
       unidad:r[2]||'',
       sucursal:r[3]||'',
       tipo:r[4]||'',
       costoTotal:dinero(r[5]),
-      costoUnidad:dinero(r[6]),
-      suc
+      costoUnidad:dinero(r[6])
     })
   }
-
   return map
 }
 
@@ -104,14 +161,26 @@ function obtenerRendimientoSubreceta(nombre,map,origen){
 
   const o=normaliza(origen)
 
-  return lista.find(x=>o&&normaliza(x.sucursal)===o)||
-         lista.find(x=>o&&normaliza(x.sucursal).includes(o))||
-         lista[0]
+  let x=lista.find(r=>o&&normaliza(r.sucursal)===o)
+  if(x)return x
+
+  x=lista.find(r=>o&&(
+    normaliza(r.sucursal).includes(o)||
+    o.includes(normaliza(r.sucursal))
+  ))
+  if(x)return x
+
+  const suc=o.includes('bucareli')?'bucareli':o.includes('coyoacan')?'coyoacan':''
+  if(suc){
+    x=lista.find(r=>normaliza(r.sucursal).includes(suc))
+    if(x)return x
+  }
+
+  return lista[0]
 }
 
 function obtenerIngredientesPlatillo(nombre,rows){
   const n=normaliza(nombre)
-
   return rows.slice(1).filter(r=>normaliza(r[0])===n)
 }
 
@@ -121,26 +190,29 @@ function esSubreceta(nombre,subrows){
 }
 
 function buscarIngredienteCatalogo(nombre,map){
-  return map.get(normaliza(nombre))||null
+  const n=normaliza(nombre)
+  if(map.has(n))return map.get(n)
+
+  for(const[k,v]of map){
+    if(k.replace(/\s+/g,'')===n.replace(/\s+/g,''))return v
+  }
+
+  return null
 }
 
 function agregarAlergeno(lista,nombre,alergico){
   if(!alergico)return
-
   const clave=normaliza(nombre)
-
-  if(!lista.some(x=>normaliza(x.nombre)===clave)){
+  if(!lista.some(x=>normaliza(x.nombre)===clave))
     lista.push({nombre,alergico})
-  }
 }
 
 function limpiarNombreSubreceta(nombre){
-  return (nombre||'').toString().replace(/^sub\s+/i,'').trim()
+  return(nombre||'').toString().replace(/^sub\s+/i,'').trim()
 }
 
 function obtenerAlergenosSubreceta(nombre,subrows,catalogoMap,visitados=new Set()){
   const clave=normaliza(nombre)
-
   if(visitados.has(clave))return[]
   visitados.add(clave)
 
@@ -148,7 +220,6 @@ function obtenerAlergenosSubreceta(nombre,subrows,catalogoMap,visitados=new Set(
   const filas=subrows.slice(1).filter(r=>normaliza(r[0])===clave)
 
   for(const r of filas){
-
     const ingrediente=r[1]||''
     if(!ingrediente)continue
 
@@ -160,41 +231,108 @@ function obtenerAlergenosSubreceta(nombre,subrows,catalogoMap,visitados=new Set(
     }
 
     if(esSubreceta(ingrediente,subrows)){
-      const sub=obtenerAlergenosSubreceta(ingrediente,subrows,catalogoMap,visitados)
-      for(const a of sub){
-        agregarAlergeno(salida,a.nombre,a.alergico)
-      }
+      const sub=obtenerAlergenosSubreceta(
+        ingrediente,
+        subrows,
+        catalogoMap,
+        new Set(visitados)
+      )
+      for(const a of sub)agregarAlergeno(salida,a.nombre,a.alergico)
     }
   }
 
   return salida
 }
 
-async function reporteCostos({sock,jid,platillo}){
+function buscarFilaMenu(nombre,menu,sucursal='',area=''){
+  const n=normaliza(nombre)
+  return filasMenu(menu,sucursal,area).find(r=>normaliza(r[0])===n)||
+         filasMenu(menu,sucursal,area).find(r=>normaliza(r[0]).replace(/\s+/g,'')===n.replace(/\s+/g,''))||
+         null
+}
+
+async function reporteListaMenu({sock,jid,sucursal='',area=''}){
+
   try{
+    const{menu}=await cargarRecetas()
+    const filas=filasMenu(menu,sucursal,area)
 
-    const{
-      catalogo,
-      subrecetas,
-      rendimientos,
-      platillos
-    }=await cargarRecetas()
-
-    const filaPlatillo=buscarPlatillo(platillo,platillos)
-
-    if(!filaPlatillo){
+    if(!filas.length){
       await sock.sendMessage(jid,{
-        text:`❌ No encontré el platillo "${platillo}" en el catálogo de recetas.`
+        text:`❌ No encontré productos activos para ${sucursal?etiquetaSucursal(sucursal):'el menú'}${area?` — ${etiquetaArea(area)}`:''}.`
       })
       return true
     }
 
-    const nombrePlatillo=filaPlatillo[0]
+    const grupos={cocina:[],barra:[]}
+
+    for(const r of filas){
+      const a=normaliza(r[2])==='barra'?'barra':'cocina'
+      grupos[a].push(r)
+    }
+
+    let texto=`🍽️ MENÚ ${sucursal?etiquetaSucursal(sucursal).toUpperCase():'GENERAL'}\n`
+
+    if(area)texto+=`\n${etiquetaArea(area)}\n`
+
+    if(grupos.cocina.length&&!area){
+      texto+='\n👨‍🍳 COCINA\n'
+      for(const r of grupos.cocina){
+        texto+=`• ${r[0]} — costo ${moneda(dinero(r[6]))} — venta ${moneda(dinero(r[5]))}\n`
+      }
+    }else if(grupos.cocina.length&&area==='cocina'){
+      texto+='\n👨‍🍳 COCINA\n'
+      for(const r of grupos.cocina){
+        texto+=`• ${r[0]} — costo ${moneda(dinero(r[6]))} — venta ${moneda(dinero(r[5]))}\n`
+      }
+    }
+
+    if(grupos.barra.length&&!area){
+      texto+='\n🍸 BARRA\n'
+      for(const r of grupos.barra){
+        texto+=`• ${r[0]} — costo ${moneda(dinero(r[6]))} — venta ${moneda(dinero(r[5]))}\n`
+      }
+    }else if(grupos.barra.length&&area==='barra'){
+      texto+='\n🍸 BARRA\n'
+      for(const r of grupos.barra){
+        texto+=`• ${r[0]} — costo ${moneda(dinero(r[6]))} — venta ${moneda(dinero(r[5]))}\n`
+      }
+    }
+
+    await sock.sendMessage(jid,{text:text.trim()})
+    return true
+
+  }catch(e){
+    console.error('❌ ERROR LISTA MENU:',e)
+    await sock.sendMessage(jid,{text:'❌ Ocurrió un error consultando el menú.'})
+    return true
+  }
+}
+
+async function reporteCostos({sock,jid,platillo,sucursal='',area=''}){
+
+  try{
+    const{catalogo,subrecetas,rendimientos,platillos,menu}=await cargarRecetas()
+
+    let filaMenu=buscarFilaMenu(platillo,menu,sucursal,area)
+    let nombrePlatillo=filaMenu?.[0]||platillo
+
+    const filaPlatillo=buscarPlatillo(nombrePlatillo,platillos)
+
+    if(!filaPlatillo){
+      await sock.sendMessage(jid,{
+        text:`❌ No encontré el platillo "${platillo}" en 4_PLATILLOS.`
+      })
+      return true
+    }
+
+    nombrePlatillo=filaPlatillo[0]
+
     const filas=obtenerIngredientesPlatillo(nombrePlatillo,platillos)
 
     if(!filas.length){
       await sock.sendMessage(jid,{
-        text:`❌ El platillo "${nombrePlatillo}" no tiene ingredientes registrados.`
+        text:`❌ Encontré "${nombrePlatillo}", pero no tiene ingredientes registrados.`
       })
       return true
     }
@@ -209,7 +347,7 @@ async function reporteCostos({sock,jid,platillo}){
     for(const r of filas){
 
       const ingrediente=r[1]||''
-      const cantidad=parseFloat(r[2])||0
+      const cantidad=dinero(r[2])
       const unidad=r[3]||''
       const origen=r[4]||''
       let costoUnidad=dinero(r[5])
@@ -232,17 +370,15 @@ async function reporteCostos({sock,jid,platillo}){
           catalogoMap
         )
 
-        for(const a of subAlergenos){
+        for(const a of subAlergenos)
           agregarAlergeno(alergenos,limpiarNombreSubreceta(ingrediente),a.alergico)
-        }
 
       }else{
 
         const cat=buscarIngredienteCatalogo(ingrediente,catalogoMap)
 
-        if(cat?.alergico){
+        if(cat?.alergico)
           agregarAlergeno(alergenos,ingrediente,cat.alergico)
-        }
 
         if(!costoUnidad&&cat){
           costoUnidad=cat.costo
@@ -250,9 +386,8 @@ async function reporteCostos({sock,jid,platillo}){
         }
       }
 
-      if(!costoTotal&&cantidad&&costoUnidad){
+      if(!costoTotal&&cantidad&&costoUnidad)
         costoTotal=cantidad*costoUnidad
-      }
 
       total+=costoTotal
 
@@ -264,35 +399,284 @@ async function reporteCostos({sock,jid,platillo}){
       })
     }
 
-    let texto=`🍽️ ${nombrePlatillo.toUpperCase()}\n\nIngredientes:\n`
+    let texto=`🍽️ ${nombrePlatillo.toUpperCase()}\n`
 
-    for(const x of ingredientes){
+    if(sucursal)texto+=`📍 ${etiquetaSucursal(sucursal)}`
+    if(area)texto+=`${sucursal?'\n':''}📂 ${etiquetaArea(area)}`
+    texto+='\n\nIngredientes:\n'
+
+    for(const x of ingredientes)
       texto+=`• ${x.nombre} ........ ${x.cantidad} ${x.unidad} ........ ${moneda(x.costo)}\n`
-    }
 
     texto+=`\n💰 COSTO DEL PLATILLO: ${moneda(total)}`
 
     if(alergenos.length){
-      texto+=`\n\n────────────────────\n⚠️ ALÉRGENOS:\n`
-
-      for(const a of alergenos){
+      texto+='\n\n────────────────────\n⚠️ ALÉRGENOS:\n'
+      for(const a of alergenos)
         texto+=`• ${a.nombre} — posible alérgeno: ${a.alergico}\n`
-      }
     }
 
     await sock.sendMessage(jid,{text})
-
     return true
 
   }catch(e){
-    console.error('Error reporte costos menú:',e)
+    console.error('❌ ERROR REPORTE COSTOS MENU:',e)
+    await sock.sendMessage(jid,{text:'❌ Ocurrió un error consultando la receta.'})
+    return true
+  }
+}
+
+async function reporteDescriptivo({sock,jid,platillo,sucursal='',area=''}){
+
+  try{
+    const{menu}=await cargarRecetas()
+    const fila=buscarFilaMenu(platillo,menu,sucursal,area)
+
+    if(!fila){
+      await sock.sendMessage(jid,{text:`❌ No encontré "${platillo}" en el menú solicitado.`})
+      return true
+    }
+
+    let texto=`🍽️ ${fila[0].toUpperCase()}\n`
+
+    if(sucursal)texto+=`📍 ${etiquetaSucursal(sucursal)}\n`
+    if(area)texto+=`📂 ${etiquetaArea(area)}\n`
+
+    if(fila[10])texto+=`\n${fila[10]}`
+
+    if(fila[12])texto+=`\n\n📷 ${fila[12]}`
+
+    if(!fila[10]&&!fila[12])
+      texto+='\n\n⚠️ No hay descriptivo registrado para este platillo.'
+
+    await sock.sendMessage(jid,{text})
+    return true
+
+  }catch(e){
+    console.error('❌ ERROR DESCRIPTIVO MENU:',e)
+    await sock.sendMessage(jid,{text:'❌ Ocurrió un error consultando el descriptivo.'})
+    return true
+  }
+}
+
+async function reporteProcesos({sock,jid,platillo,sucursal='',area=''}){
+
+  try{
+    const{menu,platillos}=await cargarRecetas()
+    const fila=buscarFilaMenu(platillo,menu,sucursal,area)
+
+    if(!fila){
+      await sock.sendMessage(jid,{text:`❌ No encontré "${platillo}" en el menú solicitado.`})
+      return true
+    }
+
+    const filas=obtenerIngredientesPlatillo(fila[0],platillos)
+
+    let texto=`👨‍🍳 ${fila[0].toUpperCase()}\n`
+
+    if(sucursal)texto+=`📍 ${etiquetaSucursal(sucursal)}\n`
+    if(area)texto+=`📂 ${etiquetaArea(area)}\n`
+
+    texto+='\nIngredientes:\n'
+
+    if(filas.length){
+      for(const r of filas)
+        texto+=`• ${r[1]||''} — ${r[2]||''} ${r[3]||''}\n`
+    }else{
+      texto+='• Sin ingredientes registrados.\n'
+    }
+
+    if(fila[11])texto+=`\n👨‍🍳 PROCEDIMIENTO:\n${fila[11]}`
+
+    if(fila[12])texto+=`\n\n📷 ${fila[12]}`
+
+    await sock.sendMessage(jid,{text})
+    return true
+
+  }catch(e){
+    console.error('❌ ERROR PROCESOS MENU:',e)
+    await sock.sendMessage(jid,{text:'❌ Ocurrió un error consultando el proceso.'})
+    return true
+  }
+}
+
+async function mostrarCoincidencias({sock,jid,coincidencias,sucursal='',area=''}){
+
+  if(coincidencias.length===1){
+    guardarContexto(jid,{
+      platillo:coincidencias[0],
+      sucursal,
+      area,
+      esperandoTipo:true
+    })
 
     await sock.sendMessage(jid,{
-      text:'❌ Ocurrió un error consultando el costo de la receta.'
+      text:`🍽️ Encontré:\n\n${coincidencias[0]}\n\n¿Qué reporte quieres?\n• Costos\n• Descriptivo\n• Procesos`
     })
 
     return true
   }
+
+  const lista=coincidencias.slice(0,15)
+  guardarContexto(jid,{
+    coincidencias:lista,
+    sucursal,
+    area,
+    esperandoPlatillo:true
+  })
+
+  let texto='🍽️ Encontré estos platillos:\n\n'
+
+  lista.forEach((x,i)=>{
+    texto+=`${i+1}. ${x}\n`
+  })
+
+  texto+='\nEscribe el nombre del platillo o su número.'
+
+  await sock.sendMessage(jid,{text})
+  return true
+}
+
+async function procesarRespuestaContexto({sock,jid,texto,contexto}){
+
+  const n=normaliza(texto)
+
+  if(contexto.esperandoSucursal){
+
+    const suc=nombreSucursal(n)
+
+    if(!suc){
+      await sock.sendMessage(jid,{
+        text:'📍 Indica la sucursal:\n\n• Coyoacán\n• Bucareli'
+      })
+      return true
+    }
+
+    contexto.sucursal=suc
+    contexto.esperandoSucursal=false
+
+    if(contexto.accion==='lista')
+      return await reporteListaMenu({
+        sock,
+        jid,
+        sucursal:suc,
+        area:contexto.area||''
+      })
+
+    if(contexto.accion==='recetario'){
+      if(contexto.platillo)
+        return await mostrarCoincidencias({
+          sock,
+          jid,
+          coincidencias:buscarPlatillos(
+            contexto.platillo,
+            contexto.menu||[],
+            contexto.platillos||[],
+            suc,
+            contexto.area||''
+          ),
+          sucursal:suc,
+          area:contexto.area||''
+        })
+
+      await sock.sendMessage(jid,{
+        text:`📋 Recetario ${etiquetaArea(contexto.area)} ${etiquetaSucursal(suc)}.\n\nEscribe el nombre del platillo que buscas.`
+      })
+
+      guardarContexto(jid,{
+        accion:'buscar',
+        sucursal:suc,
+        area:contexto.area||''
+      })
+
+      return true
+    }
+  }
+
+  if(contexto.esperandoTipo){
+
+    const tipo=/^costo/i.test(n)?'costos':
+               /^proceso/i.test(n)?'procesos':
+               /^(descriptivo|descritivo|descripcion|descripción)$/i.test(n)?'descriptivo':''
+
+    if(!tipo){
+      await sock.sendMessage(jid,{
+        text:'¿Qué reporte quieres?\n\n• Costos\n• Descriptivo\n• Procesos'
+      })
+      return true
+    }
+
+    borrarContexto(jid)
+
+    if(tipo==='costos')
+      return await reporteCostos({sock,jid,platillo:contexto.platillo,sucursal:contexto.sucursal,area:contexto.area})
+
+    if(tipo==='procesos')
+      return await reporteProcesos({sock,jid,platillo:contexto.platillo,sucursal:contexto.sucursal,area:contexto.area})
+
+    return await reporteDescriptivo({sock,jid,platillo:contexto.platillo,sucursal:contexto.sucursal,area:contexto.area})
+  }
+
+  if(contexto.esperandoPlatillo){
+
+    let platillo=''
+
+    if(/^\d+$/.test(n)){
+      const i=parseInt(n)-1
+      platillo=contexto.coincidencias?.[i]||''
+    }else{
+      platillo=contexto.coincidencias?.find(x=>normaliza(x)===n)||
+               contexto.coincidencias?.find(x=>normaliza(x).includes(n))||''
+    }
+
+    if(!platillo){
+      await sock.sendMessage(jid,{
+        text:'❌ No reconocí ese platillo. Escribe el nombre o el número de la lista.'
+      })
+      return true
+    }
+
+    guardarContexto(jid,{
+      platillo,
+      sucursal:contexto.sucursal||'',
+      area:contexto.area||'',
+      esperandoTipo:true
+    })
+
+    await sock.sendMessage(jid,{
+      text:`🍽️ ${platillo}\n\n¿Qué reporte quieres?\n• Costos\n• Descriptivo\n• Procesos`
+    })
+
+    return true
+  }
+
+  if(contexto.accion==='buscar'){
+
+    const coincidencias=buscarPlatillos(
+      texto,
+      contexto.menu||[],
+      contexto.platillos||[],
+      contexto.sucursal||'',
+      contexto.area||''
+    )
+
+    if(!coincidencias.length){
+      await sock.sendMessage(jid,{
+        text:`❌ No encontré "${texto}" en el recetario solicitado.`
+      })
+      return true
+    }
+
+    return await mostrarCoincidencias({
+      sock,
+      jid,
+      coincidencias,
+      sucursal:contexto.sucursal||'',
+      area:contexto.area||''
+    })
+  }
+
+  return false
 }
 
 export async function handleReportesMenu({sock,jid,m,texto,tipoGrupo}){
@@ -300,78 +684,184 @@ export async function handleReportesMenu({sock,jid,m,texto,tipoGrupo}){
   const t=limpiarTexto(texto)
   const n=normaliza(t)
 
-  const contexto=obtenerContexto(jid)
+  let contexto=obtenerContexto(jid)
 
-  if(contexto&&/^(costos|costo|procesos|proceso|descriptivo|descritivo|descripcion)$/i.test(n)){
+  if(contexto){
+    const atendido=await procesarRespuestaContexto({
+      sock,
+      jid,
+      texto:t,
+      contexto
+    })
+    if(atendido)return true
+  }
 
-    const tipo=
-      /^costo/i.test(n)?'costos':
-      /^proceso/i.test(n)?'procesos':
-      'descriptivo'
+  if(!esComandoMenu(t))return false
 
-    borrarContexto(jid)
+  const sucGrupo=sucursalGrupo(jid)
+  const esReportes=esReporteGeneral(jid)||tipoGrupo==='REPORTES'
 
-    if(tipo==='costos'){
-      return await reporteCostos({
-        sock,
-        jid,
-        platillo:contexto.platillo
-      })
-    }
+  if(/^menu\b/i.test(n)){
+
+    const suc=nombreSucursal(n)
+    const area=nombreArea(n)
+
+    if(suc)
+      return await reporteListaMenu({sock,jid,sucursal:suc,area})
+
+    if(sucGrupo)
+      return await reporteListaMenu({sock,jid,sucursal:sucGrupo,area})
+
+    guardarContexto(jid,{accion:'lista',area,esperandoSucursal:true})
 
     await sock.sendMessage(jid,{
-      text:`📋 Receta: ${contexto.platillo}\nTipo solicitado: ${tipo}\n\n⏳ Este reporte lo conectamos en el siguiente paso.`
+      text:'📍 ¿De qué sucursal?\n\n• Coyoacán\n• Bucareli'
     })
 
     return true
   }
 
-  if(!esComandoMenu(t))return false
+  if(/^recetario\b/i.test(n)){
 
-  const matchReceta=t.match(/^receta(?:s)?\s+de\s+(.+?)(?:\s+(costos?|procesos?|descriptivo|descritivo|descripcion))?$/i)
+    const area=nombreArea(n)
+    const suc=sucGrupo||nombreSucursal(n)
 
-  if(matchReceta){
+    if(area&&suc){
+      guardarContexto(jid,{accion:'buscar',sucursal:suc,area})
+      await sock.sendMessage(jid,{
+        text:`📋 RECETARIO ${etiquetaArea(area)} — ${etiquetaSucursal(suc)}\n\nEscribe el nombre del platillo que buscas.`
+      })
+      return true
+    }
 
-    const platillo=limpiarTexto(matchReceta[1])
-    const tipoTexto=matchReceta[2]||''
+    if(area&&!suc&&!esReportes){
+      guardarContexto(jid,{accion:'buscar',sucursal:'',area})
+      await sock.sendMessage(jid,{
+        text:`📋 RECETARIO ${etiquetaArea(area)}\n\nEscribe el nombre del platillo que buscas.`
+      })
+      return true
+    }
 
-    if(tipoTexto){
+    if(area&&!suc&&esReportes){
+      guardarContexto(jid,{accion:'recetario',area,esperandoSucursal:true})
+      await sock.sendMessage(jid,{
+        text:`📋 RECETARIO ${etiquetaArea(area)}\n\n¿De qué sucursal?\n\n• Coyoacán\n• Bucareli`
+      })
+      return true
+    }
 
-      const tipo=
-        /^costo/i.test(tipoTexto)?'costos':
-        /^proceso/i.test(tipoTexto)?'procesos':
-        'descriptivo'
+    guardarContexto(jid,{
+      accion:'recetario',
+      sucursal:suc,
+      esperandoArea:true
+    })
 
-      if(tipo==='costos'){
-        return await reporteCostos({
-          sock,
-          jid,
-          platillo
-        })
-      }
+    await sock.sendMessage(jid,{
+      text:'📂 ¿Qué recetario?\n\n• Cocina\n• Barra'
+    })
+
+    return true
+  }
+
+  if(contexto?.esperandoArea){
+
+    const area=nombreArea(n)
+
+    if(!area){
+      await sock.sendMessage(jid,{
+        text:'📂 Indica el área:\n\n• Cocina\n• Barra'
+      })
+      return true
+    }
+
+    borrarContexto(jid)
+
+    const suc=contexto.sucursal||sucGrupo
+
+    if(suc){
+      guardarContexto(jid,{accion:'buscar',sucursal:suc,area})
 
       await sock.sendMessage(jid,{
-        text:`📋 Receta: ${platillo}\nTipo solicitado: ${tipo}\n\n⏳ Este reporte lo conectamos en el siguiente paso.`
+        text:`📋 RECETARIO ${etiquetaArea(area)} — ${etiquetaSucursal(suc)}\n\nEscribe el nombre del platillo que buscas.`
       })
 
       return true
     }
 
-    guardarContexto(jid,{platillo})
+    guardarContexto(jid,{accion:'recetario',area,esperandoSucursal:true})
 
     await sock.sendMessage(jid,{
-      text:'¿Qué receta buscas?\n\n• Costos\n• Descriptivo\n• Procesos'
+      text:`📋 RECETARIO ${etiquetaArea(area)}\n\n¿De qué sucursal?\n\n• Coyoacán\n• Bucareli`
     })
 
     return true
   }
 
-  if(/^(cotizar|cotizacion)\b/i.test(t)){
+  const matchReceta=t.match(/^receta(?:s)?\s+(?:de\s+)?(.+?)(?:\s+(costos?|procesos?|descriptivo|descritivo|descripcion|descripción))?$/i)
 
+  if(matchReceta){
+
+    const platillo=limpiarTexto(matchReceta[1])
+    const tipoTexto=matchReceta[2]||''
+    const suc=sucGrupo
+    const area=''
+
+    const{menu,platillos}=await cargarRecetas()
+    const coincidencias=buscarPlatillos(platillo,menu,platillos,suc,area)
+
+    if(!coincidencias.length){
+      await sock.sendMessage(jid,{
+        text:`❌ No encontré "${platillo}" en las recetas${suc?` de ${etiquetaSucursal(suc)}`:''}.`
+      })
+      return true
+    }
+
+    if(coincidencias.length>1&&!tipoTexto)
+      return await mostrarCoincidencias({sock,jid,coincidencias,sucursal:suc,area})
+
+    if(coincidencias.length>1&&tipoTexto){
+      await sock.sendMessage(jid,{
+        text:'Encontré varios platillos:\n\n'+coincidencias.map((x,i)=>`${i+1}. ${x}`).join('\n')+
+             '\n\nEscribe el nombre exacto del que buscas.'
+      })
+      guardarContexto(jid,{accion:'buscar',sucursal:suc,area})
+      return true
+    }
+
+    const elegido=coincidencias[0]
+
+    if(tipoTexto){
+      const tipo=/^costo/i.test(tipoTexto)?'costos':
+                 /^proceso/i.test(tipoTexto)?'procesos':
+                 'descriptivo'
+
+      if(tipo==='costos')
+        return await reporteCostos({sock,jid,platillo:elegido,sucursal:suc,area})
+
+      if(tipo==='procesos')
+        return await reporteProcesos({sock,jid,platillo:elegido,sucursal:suc,area})
+
+      return await reporteDescriptivo({sock,jid,platillo:elegido,sucursal:suc,area})
+    }
+
+    guardarContexto(jid,{
+      platillo:elegido,
+      sucursal:suc,
+      area,
+      esperandoTipo:true
+    })
+
+    await sock.sendMessage(jid,{
+      text:`🍽️ ${elegido}\n\n¿Qué reporte quieres?\n• Costos\n• Descriptivo\n• Procesos`
+    })
+
+    return true
+  }
+
+  if(/^(cotizar|cotizacion|cotización)\b/i.test(t)){
     await sock.sendMessage(jid,{
       text:'💰 Cotización de menú\n\n⏳ La cotización la conectamos después de validar costos.'
     })
-
     return true
   }
 
