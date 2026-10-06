@@ -1187,16 +1187,13 @@ if(!fontPath){
   )
 }
 
-console.log(
-  'FUENTE JORNADA:',
-  fontPath
-)
-  console.log(
-    'FUENTE JORNADA:',
-    fontPath
-  )
+console.log('================================')
+console.log('FUENTE JORNADA ENCONTRADA:')
+console.log(fontPath)
+console.log('EXTENSION:', path.extname(fontPath))
+console.log('================================')
 
-  let font
+let font
 
   try{
 
