@@ -251,7 +251,19 @@ export async function handleChecador({
   tel10,
   tel
 }){
-  try{
+ try{
+
+    // 🚫 NO ACEPTAR UBICACIONES REENVIADAS
+    const reenviado =
+      m?.message?.locationMessage?.contextInfo?.isForwarded === true ||
+      m?.message?.extendedTextMessage?.contextInfo?.isForwarded === true
+
+    if(reenviado){
+      console.log(
+        `🚫 UBICACIÓN REENVIADA IGNORADA | ${tel10||tel||'DESCONOCIDO'} | ${jid}`
+      )
+      return
+    }
     const lat=loc.degreesLatitude
     const lng=loc.degreesLongitude
 
