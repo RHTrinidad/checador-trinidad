@@ -838,27 +838,49 @@ export async function cerrarSalidasPendientes(){
 
     if(!pendientes.length)return
 
+    /*
+      La hora actual SOLO sirve para determinar
+      si ya pasaron 16 horas desde la entrada.
+
+      NO se utilizará como hora de salida.
+    */
     const ahora=horaMX()
 
     for(const p of pendientes){
+
       const horaEntrada=(p.r[3]||'').toString().trim()
 
-      const horas=calcularHorasTrabajadas(
+      if(!horaEntrada)continue
+
+      /*
+        Calculamos cuánto tiempo ha pasado desde
+        la entrada real hasta este momento.
+
+        Esto solamente determina cuándo activar
+        el autocierre.
+      */
+      const horasTranscurridas=calcularHorasTrabajadas(
         horaEntrada,
         ahora
       )
 
-      if(!horas)continue
+      if(!horasTranscurridas)continue
 
-      const partes=horas.split(':')
-      const num=
-        (parseInt(partes[0])||0)+
-        ((parseInt(partes[1])||0)/60)
+      const partesHoras=horasTranscurridas.split(':')
 
-      if(num<CIERRE_AUTO_HORAS)continue
+      const numHoras=
+        (parseInt(partesHoras[0])||0)+
+        ((parseInt(partesHoras[1])||0)/60)
 
-      const client=await sheetsClient()
+      /*
+        Todavía no han pasado las 16 horas.
+      */
+      if(numHoras<CIERRE_AUTO_HORAS)continue
 
+      /*
+        Obtener la jornada programada guardada
+        en la columna M.
+      */
       const jornada=(p.r[12]||'').toString().trim()
 
       let entradaProgramada=''
@@ -873,12 +895,54 @@ export async function cerrarSalidasPendientes(){
         salidaProgramada=match[2]
       }
 
+      /*
+        Si no existe una salida programada,
+        no podemos hacer un autocierre correcto.
+      */
+      if(!salidaProgramada){
+        console.error(
+          `⚠️ No se puede autocerrar: no existe salida programada | ${p.r[1]} | ${jornada}`
+        )
+        continue
+      }
+
+      /*
+        IMPORTANTE:
+
+        La hora actual NO es la salida.
+
+        La salida del autocierre es la salida
+        PROGRAMADA de la jornada.
+      */
+      const horaSalidaAuto=salidaProgramada
+
+      /*
+        Las horas trabajadas se calculan desde
+        la entrada REAL hasta la salida PROGRAMADA.
+      */
+      const horas=calcularHorasTrabajadas(
+        horaEntrada,
+        horaSalidaAuto
+      )
+
+      if(!horas)continue
+
+      /*
+        Las horas extras también se calculan tomando
+        como salida la salida PROGRAMADA.
+
+        De esta manera no se generan horas extras
+        falsas por el tiempo que tardó en ejecutarse
+        el autocierre.
+      */
       const extra=calcularExtra(
         horaEntrada,
-        ahora,
+        horaSalidaAuto,
         entradaProgramada,
         salidaProgramada
       )
+
+      const client=await sheetsClient()
 
       await client.spreadsheets.values.update({
         spreadsheetId:SPREADSHEET_ID,
@@ -886,7 +950,7 @@ export async function cerrarSalidasPendientes(){
         valueInputOption:'USER_ENTERED',
         requestBody:{
           values:[[
-            ahora,
+            horaSalidaAuto,
             p.r[6]||'',
             p.r[7]||'',
             p.r[8]||'',
@@ -897,7 +961,12 @@ export async function cerrarSalidasPendientes(){
           ]]
         }
       })
+
+      console.log(
+        `🔒 AUTOCIERRE | ${p.r[1]} | Entrada ${horaEntrada} | Salida programada ${horaSalidaAuto} | Horas ${horas} | Extra ${extra.extra}`
+      )
     }
+
   }catch(e){
     console.error('Error cerrando salidas pendientes:',e)
   }
