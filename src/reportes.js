@@ -214,7 +214,7 @@ export async function asistenciaHoy(filtroSucursal,jid,sock,areaFiltro=''){
   const grupos={}
   for(const r of base){
     const sucBase=(r[2]||'').toString()
-    if(!sucursalCoincideAsignada(sucBase,filtroSucursal))continue
+   if(filtroSucursal!=='todas'&&!sucursalCoincideAsignada(sucBase,filtroSucursal))continue 
     const area=normalizaArea(r[10])
     if(areaFiltro&&!jornadaCoincideArea(area,areaFiltro))continue
     const nombre=r[1]||''
@@ -1843,7 +1843,8 @@ export async function handleReportes({
   texto,
   jid,
   sock,
-  filtroGrupo
+  filtroGrupo,
+  usuario
 }){
 
   const low=normaliza(texto)
@@ -1895,28 +1896,46 @@ export async function handleReportes({
   // ================================================
   // ASISTENCIA HOY
   // ================================================
-
-  if(low.startsWith('asistencia hoy')){
-
-    let suc=low
-      .replace('asistencia hoy','')
-      .trim()
-
-    if(!suc)suc=filtroGrupo||'coyoacan'
-
-    await asistenciaHoy(
-      suc,
+if(low.startsWith('asistencia hoy')){
+  let resto=low.replace('asistencia hoy','').trim()
+  let area=''
+  if(resto.includes('cocina'))area='cocina'
+  else if(resto.includes('barra'))area='barra'
+  else if(resto.includes('salon')||resto.includes('salón'))area='salon'
+  let suc=''
+  if(resto.includes('bucareli'))suc='bucareli'
+  else if(resto.includes('coyoacan')||resto.includes('coyoacán')||resto.includes('hotel')||resto.includes('trinidad'))suc='coyoacan'
+  const esReportes=!filtroGrupo
+  if(esReportes&&!suc&&!area)suc='todas'
+  if(!esReportes&&!suc)suc=filtroGrupo||'coyoacan'
+  if(esReportes&&area&&!suc){
+    const mensaje=iniciarLista({
       jid,
-      sock
-    )
-
+      usuario,
+      contexto:{
+        proceso:'ASISTENCIA_HOY',
+        area
+      },
+      opciones:{
+        1:{texto:'Coyoacán',valor:'coyoacan'},
+        2:{texto:'Bucareli',valor:'bucareli'}
+      },
+      mensaje:'🏢 ¿De qué sucursal quieres la asistencia de hoy?'
+    })
+    await sock.sendMessage(jid,{text:mensaje})
     return true
   }
-
+  await asistenciaHoy(
+    suc,
+    jid,
+    sock,
+    area
+  )
+  return true
+}
   // ================================================
   // FALTAS
   // ================================================
-
   if(low.startsWith('faltas')){
 
     let suc=low
@@ -2223,5 +2242,36 @@ export async function handleReportes({
     return true
   }
 
+  return false
+}
+export async function handleReportes({
+  texto,
+  jid,
+  sock,
+  filtroGrupo,
+  usuario
+}){
+  const low=normaliza(texto)
+
+  // TODO el código actual de handleReportes
+  // ...
+  // ...
+  // ...
+
+} // ← aquí termina handleReportes
+
+
+export async function continuarListaReporte({resultado,jid,sock}){
+  if(!resultado||resultado.estado!=='RESUELTA')return false
+  const contexto=resultado.contexto||{}
+  if(contexto.proceso==='ASISTENCIA_HOY'){
+    await asistenciaHoy(
+      resultado.valor,
+      jid,
+      sock,
+      contexto.area||''
+    )
+    return true
+  }
   return false
 }
