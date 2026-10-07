@@ -225,6 +225,33 @@ async function conectar(){
               continue
             }
             /*
+            /*
+  FLUJO DE LISTA NUMÉRICA
+*/
+if(hayListaPendiente({jid,usuario:identidad.tel10})){
+  const resultado=resolverLista({
+    jid,
+    usuario:identidad.tel10,
+    texto
+  })
+  if(resultado?.estado==='INVALIDA'){
+    await sock.sendMessage(
+      jid,
+      {
+        text:resultado.mensaje
+      }
+    )
+    continue
+  }
+  if(resultado?.estado==='RESUELTA'){
+    const atendido=await continuarListaReporte({
+      resultado,
+      jid,
+      sock
+    })
+    if(atendido)continue
+  }
+}
               PAGOS / COMPRAS
             */
             if(
