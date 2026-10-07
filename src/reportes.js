@@ -6,7 +6,7 @@ import opentype from 'opentype.js'
 import {SPREADSHEET_ID} from './config.js'
 import {getRows,sheetsClient,getHorarioBaseMap} from './sheets.js'
 import {fechaLaboral,horaMX,minutos,parseFechaMX,normaliza,parseHorarioRango,getRangoSemana,sucursalCoincideConFiltro,scoreEmpleado,calcularExtra} from './utils.js'
-
+import {iniciarLista}from'./flujo_numerico.js'
 const DIAS_RETARDOS=30
 const DIAS_CRITICOS=45
 const CUTOFF_RETARDOS='2026-10-02'
