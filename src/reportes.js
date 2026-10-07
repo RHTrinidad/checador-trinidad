@@ -1896,46 +1896,86 @@ export async function handleReportes({
   // ================================================
   // ASISTENCIA HOY
   // ================================================
-if(low.startsWith('asistencia hoy')){
-  let resto=low.replace('asistencia hoy','').trim()
-  let area=''
-  if(resto.includes('cocina'))area='cocina'
-  else if(resto.includes('barra'))area='barra'
-  else if(resto.includes('salon')||resto.includes('salón'))area='salon'
-  let suc=''
-  if(resto.includes('bucareli'))suc='bucareli'
-  else if(resto.includes('coyoacan')||resto.includes('coyoacán')||resto.includes('hotel')||resto.includes('trinidad'))suc='coyoacan'
-  const esReportes=!filtroGrupo
-  if(esReportes&&!suc&&!area)suc='todas'
-  if(!esReportes&&!suc)suc=filtroGrupo||'coyoacan'
-  if(esReportes&&area&&!suc){
-    const mensaje=iniciarLista({
+
+  if(low.startsWith('asistencia hoy')){
+
+    let resto=low.replace('asistencia hoy','').trim()
+
+    let area=''
+
+    if(resto.includes('cocina'))area='cocina'
+    else if(resto.includes('barra'))area='barra'
+    else if(
+      resto.includes('salon')||
+      resto.includes('salón')
+    )area='salon'
+
+    let suc=''
+
+    if(resto.includes('bucareli')){
+      suc='bucareli'
+    }else if(
+      resto.includes('coyoacan')||
+      resto.includes('coyoacán')||
+      resto.includes('hotel')||
+      resto.includes('trinidad')
+    ){
+      suc='coyoacan'
+    }
+
+    const esReportes=!filtroGrupo
+
+    if(esReportes&&!suc&&!area){
+      suc='todas'
+    }
+
+    if(!esReportes&&!suc){
+      suc=filtroGrupo||'coyoacan'
+    }
+
+    if(esReportes&&area&&!suc){
+
+      const mensaje=iniciarLista({
+        jid,
+        usuario,
+        contexto:{
+          proceso:'ASISTENCIA_HOY',
+          area
+        },
+        opciones:{
+          1:{
+            texto:'Coyoacán',
+            valor:'coyoacan'
+          },
+          2:{
+            texto:'Bucareli',
+            valor:'bucareli'
+          }
+        },
+        mensaje:'🏢 ¿De qué sucursal quieres la asistencia de hoy?'
+      })
+
+      await sock.sendMessage(jid,{
+        text:mensaje
+      })
+
+      return true
+    }
+
+    await asistenciaHoy(
+      suc,
       jid,
-      usuario,
-      contexto:{
-        proceso:'ASISTENCIA_HOY',
-        area
-      },
-      opciones:{
-        1:{texto:'Coyoacán',valor:'coyoacan'},
-        2:{texto:'Bucareli',valor:'bucareli'}
-      },
-      mensaje:'🏢 ¿De qué sucursal quieres la asistencia de hoy?'
-    })
-    await sock.sendMessage(jid,{text:mensaje})
+      sock,
+      area
+    )
+
     return true
   }
-  await asistenciaHoy(
-    suc,
-    jid,
-    sock,
-    area
-  )
-  return true
-}
+
   // ================================================
   // FALTAS
   // ================================================
+
   if(low.startsWith('faltas')){
 
     let suc=low
@@ -2237,6 +2277,40 @@ if(low.startsWith('asistencia hoy')){
       jid,
       sock,
       filtroGrupo
+    )
+
+    return true
+  }
+
+  return false
+}
+
+// =====================================================
+// CONTINUAR LISTA NUMÉRICA
+// =====================================================
+
+export async function continuarListaReporte({
+  resultado,
+  jid,
+  sock
+}){
+
+  if(
+    !resultado||
+    resultado.estado!=='RESUELTA'
+  ){
+    return false
+  }
+
+  const contexto=resultado.contexto||{}
+
+  if(contexto.proceso==='ASISTENCIA_HOY'){
+
+    await asistenciaHoy(
+      resultado.valor,
+      jid,
+      sock,
+      contexto.area||''
     )
 
     return true
