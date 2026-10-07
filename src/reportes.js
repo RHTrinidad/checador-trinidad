@@ -2244,29 +2244,3 @@ if(low.startsWith('asistencia hoy')){
 
   return false
 }
-export async function handleReportes({
-  texto,
-  jid,
-  sock,
-  filtroGrupo,
-  usuario
-}){
-  const low=normaliza(texto)
-
- // ← aquí termina handleReportes
-
-
-export async function continuarListaReporte({resultado,jid,sock}){
-  if(!resultado||resultado.estado!=='RESUELTA')return false
-  const contexto=resultado.contexto||{}
-  if(contexto.proceso==='ASISTENCIA_HOY'){
-    await asistenciaHoy(
-      resultado.valor,
-      jid,
-      sock,
-      contexto.area||''
-    )
-    return true
-  }
-  return false
-}
