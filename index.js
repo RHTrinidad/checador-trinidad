@@ -311,13 +311,14 @@ if(hayListaPendiente({jid,usuario:identidad.tel10})){
                tipoGrupo==='GERENTES')&&
               COMANDOS_REPORTES.test(texto)
             ){
-              await handleReportes({
-                sock,
-                jid,
-                m,
-                texto,
-                filtroGrupo:getFiltro(jid)
-              })
+await handleReportes({
+  sock,
+  jid,
+  m,
+  texto,
+  filtroGrupo:getFiltro(jid),
+  usuario:identidad.tel10
+})
               continue
             }
           }catch(e){
