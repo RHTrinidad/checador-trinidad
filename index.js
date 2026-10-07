@@ -296,7 +296,15 @@ async function conectar(){
             if(tipoGrupo==='CHECADORES'){
 
               if(loc){
-
+    console.log(
+      '📍 CHECADOR RECIBIDO:',
+      {
+        id: m.key?.id,
+        jid,
+        tel10: identidad.tel10,
+        loc
+      }
+    )
                 await handleChecador({
                   sock,
                   jid,
