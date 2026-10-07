@@ -252,7 +252,8 @@ if(hayListaPendiente({jid,usuario:identidad.tel10})){
     if(atendido)continue
   }
 }
-              PAGOS / COMPRAS
+            /*  
+            PAGOS / COMPRAS
             */
             if(
               (tipoGrupo==='REPORTES'||
