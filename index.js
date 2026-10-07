@@ -224,10 +224,8 @@ async function conectar(){
               }
               continue
             }
-            /*
-            /*
-  FLUJO DE LISTA NUMÉRICA
-*/
+         FLUJO DE LISTA NUMÉRICA
+
 if(hayListaPendiente({jid,usuario:identidad.tel10})){
   const resultado=resolverLista({
     jid,
