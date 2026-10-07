@@ -214,7 +214,7 @@ export async function asistenciaHoy(filtroSucursal,jid,sock,areaFiltro=''){
   const grupos={}
   for(const r of base){
     const sucBase=(r[2]||'').toString()
-   if(filtroSucursal!=='todas'&&!sucursalCoincideAsignada(sucBase,filtroSucursal))continue 
+if(filtroSucursal!=='todas'&&!sucursalCoincideAsignada(sucBase,filtroSucursal))continue
     const area=normalizaArea(r[10])
     if(areaFiltro&&!jornadaCoincideArea(area,areaFiltro))continue
     const nombre=r[1]||''
