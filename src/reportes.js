@@ -2253,12 +2253,7 @@ export async function handleReportes({
 }){
   const low=normaliza(texto)
 
-  // TODO el código actual de handleReportes
-  // ...
-  // ...
-  // ...
-
-} // ← aquí termina handleReportes
+ // ← aquí termina handleReportes
 
 
 export async function continuarListaReporte({resultado,jid,sock}){
