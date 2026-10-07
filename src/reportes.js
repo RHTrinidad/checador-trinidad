@@ -205,78 +205,89 @@ function mapaBase(baseRows){
 // ASISTENCIA DE HOY
 // =====================================================
 
-export async function asistenciaHoy(filtroSucursal,jid,sock){
+export async function asistenciaHoy(filtroSucursal,jid,sock,areaFiltro=''){
   const {asis,base}=await cargarDatos()
   const fLab=fechaLaboral()
   const ahoraMin=minutos(horaMX())
   const mx=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Mexico_City'}))
   const diaNum=mx.getDay()
-  const llego=[],retardo=[],falta=[],futuro=[],descanso=[]
-
+  const grupos={}
   for(const r of base){
     const sucBase=(r[2]||'').toString()
     if(!sucursalCoincideAsignada(sucBase,filtroSucursal))continue
-
+    const area=normalizaArea(r[10])
+    if(areaFiltro&&!jornadaCoincideArea(area,areaFiltro))continue
     const nombre=r[1]||''
     const tel=tel10(r[0])
     if(!tel)continue
-
     const horario=getHorarioDia(r,diaNum)
     if(!horario)continue
-
+    const claveArea=area||'sinarea'
+    const clave=`${normaliza(sucBase)}|${claveArea}`
+    if(!grupos[clave]){
+      grupos[clave]={
+        sucursal:sucBase,
+        area:claveArea,
+        llego:[],
+        retardo:[],
+        falta:[],
+        futuro:[],
+        descanso:[]
+      }
+    }
+    const g=grupos[clave]
     if(horario.toLowerCase().includes('descanso')){
-      descanso.push(`• ${nombre} - [${sucBase}] - 💤 DESCANSO`)
+      g.descanso.push(`• ${nombre} - 💤 DESCANSO`)
       continue
     }
-
     const parsed=parseHorarioRango(horario)
     if(!parsed)continue
-
     if(parsed.entrada==='LIBRE'){
       const registro=asis.find(a=>tel10(a[0])===tel&&a[2]===fLab&&a[3])
-      if(registro)llego.push(`• ${nombre} - [${sucBase}] - Entró ${registro[3]} en ${registro[6]||'-'} ✅`)
-      else futuro.push(`• ${nombre} - [${sucBase}] - LIBRE`)
+      if(registro)g.llego.push(`• ${nombre} - Entró ${registro[3]} en ${registro[6]||'-'} ✅`)
+      else g.futuro.push(`• ${nombre} - LIBRE`)
       continue
     }
-
     const registro=asis.find(a=>tel10(a[0])===tel&&a[2]===fLab&&a[3]&&!esDescansoRegistro(a))
-
     if(registro){
       const entrada=registro[3]
       const dif=minutos(entrada)-minutos(parsed.entrada)
-
       if(esTrabajoDescanso(registro)){
-        llego.push(`• ${nombre} - [${sucBase}] - TRABAJO EN DESCANSO - ${entrada} ✅`)
+        g.llego.push(`• ${nombre} - TRABAJO EN DESCANSO - ${entrada} ✅`)
       }else if(dif>15){
-        retardo.push(`• ${nombre} - [${sucBase}] Prog ${parsed.entrada} - Entró ${entrada} - ⏰ ${dif}m tarde - ${registro[6]||''}`)
+        g.retardo.push(`• ${nombre} - Prog ${parsed.entrada} - Entró ${entrada} - ⏰ ${dif}m tarde - ${registro[6]||''}`)
       }else{
-        llego.push(`• ${nombre} - [${sucBase}] Prog ${parsed.entrada} - Entró ${entrada} ✅ - ${registro[6]||''}`)
+        g.llego.push(`• ${nombre} - Prog ${parsed.entrada} - Entró ${entrada} ✅ - ${registro[6]||''}`)
       }
     }else{
       const dif=ahoraMin-minutos(parsed.entrada)
-      if(dif<0)futuro.push(`• ${nombre} - [${sucBase}] - Prog ${parsed.entrada}`)
-      else falta.push(`• ${nombre} - [${sucBase}] - Prog ${parsed.entrada} - ❌ ${dif}m sin llegar`)
+      if(dif<0)g.futuro.push(`• ${nombre} - Prog ${parsed.entrada}`)
+      else g.falta.push(`• ${nombre} - Prog ${parsed.entrada} - ❌ ${dif}m sin llegar`)
     }
   }
-
-  const txt=
-`📍 *ASISTENCIA HOY ${fLab} - ${String(filtroSucursal).toUpperCase()}* ${horaMX()}
-
-✅ *A TIEMPO (${llego.length}):*
-${llego.join('\n')||'-'}
-
-⏰ *RETARDOS (${retardo.length}):*
-${retardo.join('\n')||'-'}
-
-❌ *NO HAN LLEGADO (${falta.length}):*
-${falta.join('\n')||'Todos llegaron'}
-
-⏳ *PRÓXIMOS (${futuro.length}):*
-${futuro.join('\n')||'-'}
-
-💤 *DESCANSOS (${descanso.length}):*
-${descanso.join('\n')||'-'}`
-
+  const gruposOrdenados=Object.values(grupos).sort((a,b)=>{
+    const sa=normaliza(a.sucursal)
+    const sb=normaliza(b.sucursal)
+    const aa=a.area
+    const ab=b.area
+    const ordenSuc=x=>x.includes('coyo')||x.includes('hotel')||x.includes('trinidad')?0:x.includes('bucareli')?1:9
+    const ordenArea=x=>x==='cocina'?0:x==='barra'?1:x==='salon'?2:9
+    return ordenSuc(sa)-ordenSuc(sb)||ordenArea(aa)-ordenArea(ab)
+  })
+  let txt=`📍 *ASISTENCIA HOY ${fLab}* ${horaMX()}\n`
+  for(const g of gruposOrdenados){
+    const tituloSuc=nombreSucursalJornada(g.sucursal)
+    const tituloArea=g.area==='sinarea'?'SIN AREA':nombreAreaJornada(g.area)
+    txt+=`\n━━━━━━━━━━━━━━━━━━\n📍 *${tituloSuc} - ${tituloArea}*\n━━━━━━━━━━━━━━━━━━\n`
+    txt+=`\n✅ *A TIEMPO (${g.llego.length}):*\n${g.llego.join('\n')||'-'}\n`
+    txt+=`\n⏰ *RETARDOS (${g.retardo.length}):*\n${g.retardo.join('\n')||'-'}\n`
+    txt+=`\n❌ *NO HAN LLEGADO (${g.falta.length}):*\n${g.falta.join('\n')||'Todos llegaron'}\n`
+    txt+=`\n⏳ *PRÓXIMOS (${g.futuro.length}):*\n${g.futuro.join('\n')||'-'}\n`
+    txt+=`\n💤 *DESCANSOS (${g.descanso.length}):*\n${g.descanso.join('\n')||'-'}\n`
+  }
+  if(!gruposOrdenados.length){
+    txt+='\nNo se encontraron empleados para el filtro solicitado.'
+  }
   await sock.sendMessage(jid,{text:txt})
 }
 
