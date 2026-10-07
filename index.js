@@ -7,6 +7,8 @@ import {handleChecador,registrarDescansos,cerrarSalidasPendientes,checkNoLlegaro
 import {handleReportes}from'./src/reportes.js'
 import {handleCompras}from'./src/compras/compras.js'
 import {handlePagos}from'./src/compras/pagos.js'
+import {hayListaPendiente,resolverLista}from'./src/flujo_numerico.js'
+import {continuarListaReporte}from'./src/reportes.js'
 const AUTH_DIR='/app/auth'
 const COMANDOS_REPORTES=/^(lista de reportes|reportes|info|datos|cuenta bancaria|cuenta empleado|datos bancarios|cuenta|banco|clave|clabe|asistencia hoy|resumen|reporte|compras\b|faltas|retardos|críticos|criticos|graves|excel|reporte semanal|reporte mensual|jornada)\b/i
 const sesion={sock:null,conectado:false}
