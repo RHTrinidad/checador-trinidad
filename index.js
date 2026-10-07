@@ -8,7 +8,6 @@ import {handleChecador,registrarDescansos,cerrarSalidasPendientes,checkNoLlegaro
 import {handleReportes}from'./src/reportes.js'
 import {handleCompras}from'./src/compras/compras.js'
 import {handlePagos}from'./src/compras/pagos.js'
-import {handleReportesMenu}from'./src/menu/reportes_menu.js'
 
 const AUTH_DIR='/app/auth'
 
@@ -426,23 +425,7 @@ async function conectar(){
               REPORTES
             */
 
-            if(
-              (tipoGrupo==='REPORTES'||
-               tipoGrupo==='GERENTES')&&
-              COMANDOS_REPORTES.test(texto)
-            ){
-
-              await handleReportes({
-                sock,
-                jid,
-                m,
-                texto,
-                filtroGrupo:getFiltro(jid)
-              })
-
-              continue
-            }
-
+            
           }catch(e){
 
             console.error(
