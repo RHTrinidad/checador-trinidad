@@ -3,7 +3,13 @@ import pino from'pino'
 import qrcode from'qrcode-terminal'
 import cron from'node-cron'
 import {getTipoGrupo,GRUPO_COYOACAN_ID,GRUPO_BUCARELI_ID}from'./src/config.js'
-import {handleChecador,registrarDescansos,cerrarSalidasPendientes,checkNoLlegaron}from'./src/checador.js'
+import {
+  handleChecador,
+  registrarDescansos,
+  registrarFaltasNaturales,
+  cerrarSalidasPendientes,
+  checkNoLlegaron
+} from './src/checador.js'
 import {handleReportes}from'./src/reportes.js'
 import {handleCompras}from'./src/compras/compras.js'
 import {handlePagos}from'./src/compras/pagos.js'
@@ -350,6 +356,18 @@ cron.schedule(
   async()=>{
     console.log('⏱️ Procesos automáticos...')
     await procesos()
+  },
+  {
+    timezone:'America/Mexico_City'
+  }
+)
+cron.schedule(
+  '0 23 * * *',
+  async()=>{
+    if(!sesion.sock||!sesion.conectado)return
+
+    console.log('📋 Iniciando registro de faltas naturales...')
+    await registrarFaltasNaturales()
   },
   {
     timezone:'America/Mexico_City'
