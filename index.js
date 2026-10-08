@@ -146,10 +146,24 @@ async function conectar(){
         }
       }
     )
-    sock.ev.on(
-      'messages.upsert',
-      async({messages,type})=>{
-        if(type!=='notify')return
+   sock.ev.on(
+  'messages.upsert',
+  async({messages,type})=>{
+    console.log('📨 UPSERT RECIBIDO:', {
+      type,
+      cantidad: messages?.length,
+      mensajes: messages?.map(m => ({
+        remoteJid: m.key?.remoteJid,
+        fromMe: m.key?.fromMe,
+        messageStubType: m.messageStubType,
+        messageKeys: Object.keys(m.message || {})
+      }))
+    })
+
+    if(type!=='notify'){
+      console.log('⏭️ MENSAJES DESCARTADOS POR TIPO:', type)
+      return
+    }
         for(const m of messages){
           try{
             if(!m.message||m.key?.fromMe)continue
