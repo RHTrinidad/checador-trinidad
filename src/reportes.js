@@ -1893,29 +1893,60 @@ Equivalentes: ${equivalentes}
 // ROUTER PRINCIPAL
 // =====================================================
 
+
 export async function handleReportes({
   texto,
   jid,
   sock,
   filtroGrupo,
+  tipoGrupo,
   usuario
 }){
+  const esReportes = tipoGrupo === 'REPORTES'
+  const esGerente = tipoGrupo === 'GERENTES'
+
+  // Si no tiene un rol autorizado, no responde.
+  if(!esReportes && !esGerente)return false
 
   const low=normaliza(texto)
 
-  if(low==='lista de reportes'){
-
-    await sock.sendMessage(jid,{
-      text:textoListaReportes(filtroGrupo)
-    })
-
-    return true
-  }
-
-  if(low==='reportes'||low==='reporte'){
+  // Los gerentes no pueden consultar datos personales
+  // ni información bancaria.
+  if(
+    esGerente &&
+    /^(numero|número|num|tel|telefono|teléfono|info|ficha|datos|dato|cuenta bancaria|cuenta empleado|datos bancarios|banco|clave|clabe|cuenta)\b/i.test(texto.trim())
+  ){
     return false
   }
 
+  // Comandos exclusivos del grupo Reportes.
+  if(
+    esGerente &&
+    /^(criticos|críticos|graves|excel|reporte semanal|reporte mensual)\b/i.test(texto.trim())
+  ){
+    return false
+  }
+
+  // Los gerentes solo pueden consultar su propia sucursal.
+  if(esGerente){
+    const comando=normaliza(texto)
+    const pideBucareli=/\bbucareli\b/i.test(comando)
+    const pideCoyoacan=/\bcoyoacan\b|\bcoyoacán\b|\bhotel\b|\btrinidad\b/i.test(comando)
+
+    if(
+      filtroGrupo==='coyoacan' &&
+      pideBucareli
+    ){
+      return false
+    }
+
+    if(
+      filtroGrupo==='bucareli' &&
+      pideCoyoacan
+    ){
+      return false
+    }
+  }
   // ================================================
   // JORNADA SEMANAL
   // ================================================
