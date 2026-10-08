@@ -797,7 +797,7 @@ const dia=diaLaboral()
   }finally{
     registrandoDescansos=false
   }
-  
+  }
 export async function registrarFaltasNaturales(){
   try{
     const fecha=fechaLaboral()
