@@ -797,6 +797,132 @@ const dia=diaLaboral()
   }finally{
     registrandoDescansos=false
   }
+  
+export async function registrarFaltasNaturales(){
+  try{
+    const fecha=fechaLaboral()
+    const dia=diaLaboral()
+
+    const horarioRows=await getRows('Horario_Base!A2:K')
+    const asistenciaRows=await getRows('Asistencia!A:M')
+
+    const incidenciasRegistradas=new Set()
+    const empleadosConEntrada=new Set()
+
+    // Revisar los registros existentes del día laboral.
+    for(let i=1;i<asistenciaRows.length;i++){
+      const r=asistenciaRows[i]
+
+      const fechaRow=(r[2]||'').toString().trim()
+      if(fechaRow!==fecha)continue
+
+      const telefono=(r[0]||'')
+        .toString()
+        .replace(/\D/g,'')
+        .slice(-10)
+
+      if(!telefono)continue
+
+      const clave=`${telefono}|${fecha}`
+      const estado=(r[4]||'')
+        .toString()
+        .trim()
+        .toUpperCase()
+
+      const entrada=(r[3]||'').toString().trim()
+
+      if(entrada){
+        empleadosConEntrada.add(clave)
+      }
+
+      if(
+        estado==='FALTA'||
+        estado==='DESCANSO'||
+        estado==='VACACIONES'||
+        estado==='FALTA JUSTIFICADA'
+      ){
+        incidenciasRegistradas.add(clave)
+      }
+    }
+
+    const valores=[]
+
+    for(const r of horarioRows){
+      const telefono=(r[0]||'')
+        .toString()
+        .replace(/\D/g,'')
+        .slice(-10)
+
+      const nombre=(r[1]||'').toString().trim()
+      const sucursal=(r[2]||'').toString().trim()
+      const horario=horarioDelDia(r,dia)
+
+      if(!telefono||!nombre||!horario)continue
+
+      // No generar faltas para incidencias programadas.
+      if(esIncidenciaHorario(horario))continue
+
+      // Solo aplicar a jornadas con horario fijo.
+      const partes=horario.match(
+        /^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/
+      )
+
+      if(!partes)continue
+
+      // LIBRE no genera falta automática.
+      if(/\blibre\b/i.test(horario))continue
+
+      const clave=`${telefono}|${fecha}`
+
+      // Evitar duplicados y no marcar a quien sí checó.
+      if(
+        empleadosConEntrada.has(clave)||
+        incidenciasRegistradas.has(clave)
+      ){
+        continue
+      }
+
+      valores.push([
+        telefono,
+        nombre,
+        fecha,
+        '',
+        'FALTA',
+        '',
+        sucursal,
+        '',
+        '',
+        '',
+        '',
+        '',
+        horario
+      ])
+
+      incidenciasRegistradas.add(clave)
+    }
+
+    if(valores.length){
+      const client=await sheetsClient()
+
+      await client.spreadsheets.values.append({
+        spreadsheetId:SPREADSHEET_ID,
+        range:'Asistencia!A:M',
+        valueInputOption:'USER_ENTERED',
+        insertDataOption:'INSERT_ROWS',
+        requestBody:{
+          values:valores
+        }
+      })
+    }
+
+    console.log(
+      `📋 FALTAS NATURALES | ${fecha} | Registradas: ${valores.length}`
+    )
+
+  }catch(e){
+    console.error('Error registrando faltas naturales:',e)
+  }
+}
 }
 
 export async function cerrarSalidasPendientes(){
