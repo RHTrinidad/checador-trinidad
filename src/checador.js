@@ -923,7 +923,6 @@ export async function registrarFaltasNaturales(){
     console.error('Error registrando faltas naturales:',e)
   }
 }
-}
 
 export async function cerrarSalidasPendientes(){
   try{
