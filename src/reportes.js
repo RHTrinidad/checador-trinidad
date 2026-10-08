@@ -784,86 +784,38 @@ Especifica un poco más el nombre.`
 // DATOS BANCARIOS
 // =====================================================
 
-async function enviarDatosBancarios(
-  nombreBuscar,
-  jid,
-  sock,
-  filtroGrupo
-){
 
-  const candidatos=await buscarEmpleado(
-    nombreBuscar,
-    filtroGrupo
-  )
-
+async function enviarDatosBancarios(nombreBuscar,jid,sock,filtroGrupo){
+  const candidatos=await buscarEmpleado(nombreBuscar,filtroGrupo)
   if(!candidatos.length){
-    await sock.sendMessage(jid,{
-      text:'No se encontró empleado en esta sucursal.'
-    })
+    await sock.sendMessage(jid,{text:'No se encontró empleado en esta sucursal.'})
     return
   }
-
-  if(
-    candidatos.length>1&&
-    candidatos[0].score===candidatos[1].score
-  ){
-
-    const opciones=candidatos
-      .slice(0,5)
-      .map(x=>`• ${nombreEmpleado(x.r)} - ${sucursalEmpleado(x.r)}`)
-      .join('\n')
-
-    await sock.sendMessage(jid,{
-      text:`Encontré más de un empleado:
-${opciones}
-
-Especifica un poco más el nombre.`
-    })
-
+  if(candidatos.length>1&&candidatos[0].score===candidatos[1].score){
+    const opciones=candidatos.slice(0,5).map(x=>`• ${nombreEmpleado(x.r)} - ${sucursalEmpleado(x.r)}`).join('\n')
+    await sock.sendMessage(jid,{text:`Encontré más de un empleado:\n${opciones}\n\nEspecifica un poco más el nombre.`})
     return
   }
-
   const r=candidatos[0].r
-
-  const banco=(r[12]||'').toString().trim()
-  const clabe=(r[13]||'').toString().trim()
-  const cuenta=(r[14]||'').toString().trim()
-  const tarjeta=(r[15]||'').toString().trim()
-
-  let tipo=''
-  let dato=''
-
-  if(clabe){
-    tipo='CLABE'
-    dato=clabe
-  }else if(cuenta){
-    tipo='Cuenta'
-    dato=cuenta
-  }else if(tarjeta){
-    tipo='Tarjeta'
-    dato=tarjeta
-  }
-
+  const banco=(r[12]||'').toString().trim(),clabe=(r[13]||'').toString().trim(),cuenta=(r[14]||'').toString().trim(),tarjeta=(r[15]||'').toString().trim()
+  let tipo='',dato=''
+  if(clabe){tipo='CLABE';dato=clabe}
+  else if(cuenta){tipo='Cuenta';dato=cuenta}
+  else if(tarjeta){tipo='Tarjeta';dato=tarjeta}
   if(!banco&&!dato){
-    await sock.sendMessage(jid,{
-      text:`🏦 ${nombreEmpleado(r)}
-Sin datos bancarios registrados.`
-    })
+    await sock.sendMessage(jid,{text:`🏦 ${nombreEmpleado(r)}\nSin datos bancarios registrados.`})
     return
   }
-
-  let txt=`🏦 *${nombreEmpleado(r)}*
-Banco: ${banco||'-'}`
-
+  let txt=`🏦 *${nombreEmpleado(r)}*\nBanco: ${banco||'-'}`
   if(tipo)txt+=`\n${tipo}: ${dato}`
   else txt+='\nSin CLABE, cuenta o tarjeta registrada.'
-
   await sock.sendMessage(jid,{text:txt})
 }
 
 // =====================================================
 // RESUMEN EMPLEADO
 // =====================================================
+
 
 export async function resumenEmpleado(
   nombreBuscar,
@@ -908,9 +860,22 @@ export async function resumenEmpleado(
   let minSem=0
   let horasMin=0
   let extraTotal=0
+  let diasJustificados=0
+  let diasVacaciones=0
+  let diasFaltaRegistrada=0
 
   const detalle=[]
   const sin=[]
+  const incidenciasContadas=new Set()
+
+  function textoIncidencia(f){
+    return [f[4],f[12]]
+      .filter(Boolean)
+      .join(' ')
+      .toUpperCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g,'')
+  }
 
   for(const f of filas){
 
@@ -924,12 +889,47 @@ export async function resumenEmpleado(
 
     if(fe<lunes||fe>domingo)continue
 
+    const incidencia=textoIncidencia(f)
+    const claveDia=`${n}|${fe.getFullYear()}-${fe.getMonth()+1}-${fe.getDate()}`
+
+    // Contabilizar una incidencia una sola vez por empleado y día.
+    if(!incidenciasContadas.has(claveDia)){
+
+      if(incidencia.includes('VACACIONES')){
+        diasVacaciones++
+        incidenciasContadas.add(claveDia)
+        detalle.push(`• ${f[2]}: VACACIONES`)
+        continue
+      }
+
+      if(incidencia.includes('FALTA JUSTIFICADA')){
+        diasJustificados++
+        incidenciasContadas.add(claveDia)
+        detalle.push(`• ${f[2]}: FALTA JUSTIFICADA`)
+        continue
+      }
+    }
+
     if(esDescansoRegistro(f)){
       detalle.push(`• ${f[2]}: DESCANSO`)
       continue
     }
 
-    if(!f[3])continue
+    if(!f[3]){
+
+      if(
+        incidencia.includes('FALTA') &&
+        !incidencia.includes('FALTA JUSTIFICADA') &&
+        !incidencia.includes('VACACIONES') &&
+        !incidenciasContadas.has(claveDia)
+      ){
+        diasFaltaRegistrada++
+        incidenciasContadas.add(claveDia)
+        detalle.push(`• ${f[2]}: FALTA`)
+      }
+
+      continue
+    }
 
     diasSem++
 
@@ -991,7 +991,12 @@ export async function resumenEmpleado(
     if(!info.descansos.has(d.getDay()))esperados++
   }
 
-  const faltas=Math.max(0,esperados-diasSem)
+  // Las vacaciones y faltas justificadas no cuentan como faltas.
+  // Las faltas registradas sí se consideran faltas.
+  const faltas=Math.max(
+    0,
+    esperados-diasSem-diasVacaciones-diasJustificados
+  )
 
   const diasNom=[
     'Dom',
@@ -1018,6 +1023,8 @@ ${rangoTxt}
 
 - Trabajados: ${diasSem}/${esperados}
 - Faltas: ${faltas}
+- Vacaciones: ${diasVacaciones}
+- Faltas justificadas: ${diasJustificados}
 - Retardos: ${retSem} (${minSem} min)
 - Sin salida: ${sin.length}
 - Horas Trab: ${formatoHoras(horasMin)}
@@ -1594,6 +1601,7 @@ export async function generarExcelSemanaYEnviar(
 // FALTAS Y RETARDOS - 45 DÍAS
 // =====================================================
 
+
 async function analizar45Dias(filtroSucursal){
 
   const {asis,emp,base}=await cargarDatos()
@@ -1611,9 +1619,38 @@ async function analizar45Dias(filtroSucursal){
   hasta.setHours(23,59,59,999)
 
   const desde=fechaDesdeHoy(DIAS_CRITICOS)
+  const CUTOFF_RETARDOS='2026-10-02'
 
   const faltas={}
   const retardos={}
+
+  // Convierte una fecha local a YYYY-MM-DD sin usar UTC.
+  function fechaLocalClave(d){
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+  }
+
+  // Detecta incidencias que explican una ausencia de entrada.
+  function esIncidenciaJustificada(registro){
+    const campos=[
+      registro?.[4],
+      registro?.[12]
+    ]
+
+    const texto=campos
+      .filter(Boolean)
+      .join(' ')
+      .toString()
+      .toUpperCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g,'')
+
+    return (
+      texto.includes('VACACIONES') ||
+      texto.includes('FALTA JUSTIFICADA') ||
+      texto.includes('DESCANSO') ||
+      texto.includes('LIBRE')
+    )
+  }
 
   for(const r of base){
 
@@ -1631,7 +1668,7 @@ async function analizar45Dias(filtroSucursal){
       d.setDate(d.getDate()+1)
     ){
 
-      const fecha=d.toISOString().slice(0,10)
+      const fecha=fechaLocalClave(d)
       const dia=d.getDay()
 
       const horario=getHorarioDia(r,dia)
@@ -1643,13 +1680,24 @@ async function analizar45Dias(filtroSucursal){
 
       if(!parsed||parsed.entrada==='LIBRE')continue
 
-      const registro=asis.find(a=>
-        tel10(a[0])===tel&&
-        fechaClave(a[2])===fecha&&
-        a[3]
+      // Busca cualquier registro del empleado en esa fecha,
+      // incluso si no tiene hora de entrada.
+      const registrosDia=asis.filter(a=>
+        tel10(a[0])===tel &&
+        fechaClave(a[2])===fecha
       )
 
-      if(!registro){
+      // Si hay entrada registrada, se utiliza ese registro.
+      const registroEntrada=registrosDia.find(a=>a[3])
+
+      // Las incidencias sin entrada no deben generar faltas naturales.
+      const tieneIncidenciaJustificada=registrosDia.some(a=>
+        esIncidenciaJustificada(a)
+      )
+
+      if(!registroEntrada){
+
+        if(tieneIncidenciaJustificada)continue
 
         if(!faltas[tel]){
           faltas[tel]={
@@ -1663,11 +1711,17 @@ async function analizar45Dias(filtroSucursal){
         continue
       }
 
-      if(esDescansoRegistro(registro))continue
-      if(esTrabajoDescanso(registro))continue
+      if(esDescansoRegistro(registroEntrada))continue
+      if(esTrabajoDescanso(registroEntrada))continue
 
-      const entrada=minutos(registro[3])
+      // No contar retardos anteriores al 2 de octubre de 2026.
+      if(fecha<CUTOFF_RETARDOS)continue
+
+      const entrada=minutos(registroEntrada[3])
       const prog=minutos(parsed.entrada)
+
+      if(entrada===null||prog===null)continue
+
       const dif=entrada-prog
 
       if(dif>15){
