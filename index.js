@@ -310,22 +310,25 @@ if(hayListaPendiente({jid,usuario:identidad.tel10})){
               })
               continue
             }
+                             
             /*
               REPORTES
+              Solo grupos con rol REPORTES o GERENTES.
             */
             if(
               (tipoGrupo==='REPORTES'||
                tipoGrupo==='GERENTES')&&
               COMANDOS_REPORTES.test(texto)
             ){
-await handleReportes({
-  sock,
-  jid,
-  m,
-  texto,
-  filtroGrupo:getFiltro(jid),
-  usuario:identidad.tel10
-})
+              await handleReportes({
+                sock,
+                jid,
+                m,
+                texto,
+                filtroGrupo:getFiltro(jid),
+                tipoGrupo,
+                usuario:identidad.tel10
+              })
               continue
             }
           }catch(e){
