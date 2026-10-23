@@ -14,6 +14,7 @@ export const GRUPO_BUCARELI_ID='120363410610062461@g.us'
 export const GRUPO_CHECADOR_COYOACAN_ID='120363403668034900@g.us'
 export const GRUPO_CHECADOR_BUCARELI_ID='120363411739089744@g.us'
 export const GRUPO_COMPRAS_ID='120363404272185958@g.us'
+export const GRUPO_CUENTAS_POR_PAGAR_ID=process.env.GRUPO_CUENTAS_POR_PAGAR_ID||''
 
 // --- SECCION SUCURSALES Y COORDENADAS ---
 export const SUCURSALES=[
@@ -31,6 +32,10 @@ export const GRUPOS={
 
   COMPRAS:[
     GRUPO_COMPRAS_ID
+  ],
+  
+    CUENTAS_POR_PAGAR:[
+    GRUPO_CUENTAS_POR_PAGAR_ID
   ],
 
   GERENTES:[
@@ -56,6 +61,9 @@ export function getTipoGrupo(jid){
 
   if(GRUPOS.GERENTES.includes(jid))
     return'GERENTES'
+
+    if(GRUPOS.CUENTAS_POR_PAGAR.includes(jid))
+    return'CUENTAS_POR_PAGAR'
 
   return null
 }
