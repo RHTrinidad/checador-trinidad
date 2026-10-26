@@ -363,8 +363,7 @@ async function obtenerDatosPagoProveedor(nombre){
       const normalizado=
         normaliza(oficial).toUpperCase().trim()
 
-      if(
-        normalizado!==buscado&&
+      if(normalizado!==buscado&&
         !normalizado.includes(buscado)&&
         !buscado.includes(normalizado)
       )continue
