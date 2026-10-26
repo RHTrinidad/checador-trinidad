@@ -62,7 +62,7 @@ export function getTipoGrupo(jid){
   if(GRUPOS.GERENTES.includes(jid))
     return'GERENTES'
 
-    if(GRUPOS.CUENTAS_POR_PAGAR.includes(jid))
+  if(GRUPOS.CUENTAS_POR_PAGAR.includes(jid))
     return'CUENTAS_POR_PAGAR'
 
   return null
