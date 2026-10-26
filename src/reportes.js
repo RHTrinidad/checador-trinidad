@@ -1163,12 +1163,13 @@ ${detalle.join('\n')||'Sin registros'}`
 // EXCEL EMPLEADO
 // =====================================================
 
-export async function generarExcelEmpleado(
-  nombreBuscarRaw,
-  jid,
+async function generarExcelEmpleado(
+  nombreBuscar,
+  jidRespuesta,
   sock,
-  tipo='actual'
-){
+  tipo = 'actual',
+  empleadoSeleccionado = null
+) {
 
   const sClient=await sheetsClient()
   const baseMap=await getHorarioBaseMap()
@@ -1189,12 +1190,24 @@ export async function generarExcelEmpleado(
 
   const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
 
-  const filtradas=filas.filter(f=>{
-  if (!coincideNombreCompleto(f[1] || '', buscar)) return false;
-    const fe=parseFechaMX(f[2])
-    return fe&&fe>=lunes&&fe<=domingo
-  })
+const filtradas = filas.filter(f => {
+  const telRegistro = String(f[0] || '')
+    .replace(/\D/g, '')
+    .slice(-10);
 
+  const telSeleccionado = String(
+    empleadoSeleccionado?.tel || ''
+  ).replace(/\D/g, '').slice(-10);
+
+  if (telSeleccionado) {
+    if (telRegistro !== telSeleccionado) return false;
+  } else {
+    if (!coincideNombreCompleto(f[1] || '', buscar)) return false;
+  }
+
+  const fe = parseFechaMX(f[2]);
+  return fe && fe >= lunes && fe <= domingo;
+});
   const wb=new ExcelJS.Workbook()
   const ws=wb.addWorksheet('Resumen')
 
