@@ -305,6 +305,58 @@ async function buscarProveedorCatalogo(nombre){
   }
 }
 
+async function obtenerDatosPagoProveedor(nombre){
+  try{
+    const rows=await getRows(
+      'lista Proveedores!A2:H',
+      SPREADSHEET_COMPRAS_ID
+    )
+
+    const buscado=
+      normaliza(nombre||'').toUpperCase().trim()
+
+    if(!buscado)return null
+
+    for(const row of rows){
+      const oficial=(row[0]||'').toString().trim()
+
+      if(!oficial)continue
+
+      const normalizado=
+        normaliza(oficial).toUpperCase().trim()
+
+      if(
+        normalizado!==buscado&&
+        !normalizado.includes(buscado)&&
+        !buscado.includes(normalizado)
+      )continue
+
+      const pagoMismoDia=
+        (row[7]||'')
+          .toString()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g,'')
+          .trim()
+          .toLowerCase()
+
+      if(pagoMismoDia!=='si')return null
+
+      return{
+        proveedor:oficial,
+        beneficiario:(row[2]||'').toString().trim(),
+        banco:(row[3]||'').toString().trim(),
+        cuenta:(row[4]||'').toString().trim()
+      }
+    }
+
+    return null
+  }catch(e){
+    console.error('Error consultando datos de pago:',e.message)
+    return null
+  }
+}
+
+
 async function leerTicketsConOpenAI(buffers){
   try{
     const conceptosValidos=
