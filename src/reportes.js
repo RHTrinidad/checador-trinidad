@@ -11,6 +11,26 @@ const DIAS_RETARDOS=30
 const DIAS_CRITICOS=45
 const CUTOFF_RETARDOS='2026-10-02'
 
+
+function coincideNombreCompleto(nombre, busqueda) {
+  const nombreNormalizado = normaliza(nombre || '');
+  const busquedaNormalizada = normaliza(busqueda || '');
+
+  if (!nombreNormalizado || !busquedaNormalizada) return false;
+
+  // Coincide por palabras completas, no por fragmentos.
+  // "Martin" coincide con "Martin Miranda", pero no con "Martinez".
+  const palabras = busquedaNormalizada
+    .split(/\s+/)
+    .filter(Boolean);
+
+  return palabras.every(palabra =>
+    new RegExp(`(^|\\s)${palabra.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`)
+      .test(nombreNormalizado)
+  );
+}
+
+
 const CATALOGO_REPORTES=[
 {comando:'info [nombre]',descripcion:'Datos generales del empleado',grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']},
 {comando:'datos [nombre]',descripcion:'Datos generales del empleado',grupos:['GERENTES_COYOACAN','GERENTES_BUCARELI','REPORTES']},
@@ -2378,28 +2398,31 @@ export async function continuarListaReporte({
   resultado,
   jid,
   sock
-}){
+}) {
+  if (!resultado || resultado.estado !== 'RESUELTA') return false;
 
-  if(
-    !resultado||
-    resultado.estado!=='RESUELTA'
-  ){
-    return false
-  }
+  const contexto = resultado.contexto || {};
 
-  const contexto=resultado.contexto||{}
-
-  if(contexto.proceso==='ASISTENCIA_HOY'){
-
+  if (contexto.proceso === 'ASISTENCIA_HOY') {
     await asistenciaHoy(
       resultado.valor,
       jid,
       sock,
-      contexto.area||''
-    )
-
-    return true
+      contexto.area || ''
+    );
+    return true;
   }
 
-  return false
+  if (contexto.proceso === 'RESUMEN_EMPLEADO') {
+    await resumenEmpleado(
+      resultado.valor.nombre,
+      jid,
+      sock,
+      contexto.tipo || 'actual',
+      resultado.valor
+    );
+    return true;
+  }
+
+  return false;
 }
