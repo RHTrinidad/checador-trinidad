@@ -65,15 +65,15 @@ async function buscarEmpleadoParaResumen(
     return;
   }
 
-  const opciones = candidatos.map(emp => ({
-    valor: {
-      nombre: emp.nombreOriginal,
-      tel: emp.tel || '',
-      sucursal: emp.sucursal || '',
-      area: emp.area || ''
-    },
-    texto: `${emp.nombreOriginal} | ${emp.sucursal || 'Sucursal sin especificar'} | ${emp.area || 'Área sin especificar'}`
-  }));
+const opciones = candidatos.map(emp => ({
+  valor: {
+    nombre: emp.nombreOriginal,
+    tel: emp.tel || '',
+    sucursal: emp.sucursal || '',
+    area: emp.area || ''
+  },
+  texto: `${emp.nombreOriginal} | ${emp.sucursal || 'Sucursal sin especificar'} | ${emp.area || 'Área sin especificar'}`
+}));
 
   await iniciarLista({
     jid,
