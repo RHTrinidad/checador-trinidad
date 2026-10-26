@@ -132,7 +132,7 @@ async function registrarDocumentosIA(jid,sock,datosIA,tipoEntrada){
         productos:documento.productos
       }
 
-      const res=await registrarCompra(datosFinal)
+            const res=await registrarCompra(datosFinal)
 
       registros++
 
@@ -141,6 +141,44 @@ async function registrarDocumentosIA(jid,sock,datosIA,tipoEntrada){
         monto:datosFinal.monto||'0.00'
       })
 
+      // Aviso a Cuentas por pagar si el proveedor lo requiere
+      if(!res.duplicado && GRUPO_CUENTAS_POR_PAGAR_ID){
+        try{
+          const pago=await obtenerDatosPagoProveedor(res.proveedor)
+
+          if(pago){
+            const monto=parseFloat(
+              (datosFinal.monto||'0').toString().replace(/,/g,'')
+            )||0
+
+            const mensajePago=
+              `Proveedor: ${pago.proveedor}\n`+
+              `Beneficiario: ${pago.beneficiario}\n`+
+              `Importe: $${monto.toFixed(2)}\n`+
+              `Número de factura: ${datosFinal.folio||'SIN FOLIO'}\n`+
+              `Banco: ${pago.banco}\n`+
+              `Cuenta bancaria: ${pago.cuenta}`
+
+            await sock.sendMessage(
+              GRUPO_CUENTAS_POR_PAGAR_ID,
+              {text:mensajePago}
+            )
+
+            // Segundo mensaje: únicamente el número de cuenta
+            if(pago.cuenta){
+              await sock.sendMessage(
+                GRUPO_CUENTAS_POR_PAGAR_ID,
+                {text:pago.cuenta}
+              )
+            }
+          }
+        }catch(error){
+          console.error(
+            'Error enviando aviso a Cuentas por pagar:',
+            error.message
+          )
+        }
+      }
       totalInsumos+=
         Array.isArray(datosFinal.productos)
           ?datosFinal.productos.length
