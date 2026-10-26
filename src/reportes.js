@@ -933,12 +933,18 @@ async function resumenEmpleado(
 
   const filas=asisRes.data.values||[]
 
-  const buscar=normaliza(
+  const buscar = normaliza(
+    empleadoSeleccionado?.nombreOriginal ||
+    empleadoSeleccionado?.nombre ||
     nombreBuscar.replace(
       /actual|pasada|pasado|esta semana|hoy/g,
       ''
     )
   )
+
+  const telSeleccionado = String(
+    empleadoSeleccionado?.tel || ''
+  ).replace(/\D/g, '').slice(-10)
 
   const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
 
@@ -977,8 +983,15 @@ async function resumenEmpleado(
   for(const f of filas){
 
     const n=normaliza(f[1]||'')
-     if (!coincideNombreCompleto(f[1] || '', buscar)) continue;
+       const telRegistro = String(f[0] || '')
+      .replace(/\D/g, '')
+      .slice(-10)
 
+    if (telSeleccionado) {
+      if (telRegistro !== telSeleccionado) continue
+    } else {
+      if (!coincideNombreCompleto(f[1] || '', buscar)) continue
+    }
     const fe=parseFechaMX(f[2])
     if(!fe)continue
 
@@ -1140,7 +1153,8 @@ ${detalle.join('\n')||'Sin registros'}`
       buscar,
       jidRespuesta,
       sock,
-      tipo
+      tipo,
+      empleadoSeleccionado
     )
   }
 }
