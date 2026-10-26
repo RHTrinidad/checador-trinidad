@@ -11,6 +11,82 @@ const DIAS_RETARDOS=30
 const DIAS_CRITICOS=45
 const CUTOFF_RETARDOS='2026-10-02'
 
+async function buscarEmpleadoParaResumen(
+  busqueda,
+  jid,
+  sock,
+  tipo = 'actual',
+  filtroGrupo = ''
+) {
+  const baseMap = await getHorarioBaseMap();
+  const buscar = normaliza(busqueda);
+
+  if (!buscar) {
+    await sock.sendMessage(jid, {
+      text: 'Escribe el nombre del empleado. Ejemplo: resumen Martin actual'
+    });
+    return;
+  }
+
+  const empleados = Object.values(baseMap);
+  const vistos = new Set();
+
+  const candidatos = empleados.filter(emp => {
+    const nombre = emp.nombreOriginal || '';
+    const tel = String(emp.tel || '').replace(/\D/g, '');
+    const clave = tel || normaliza(nombre);
+
+    if (!nombre || vistos.has(clave)) return false;
+    if (!coincideNombreCompleto(nombre, buscar)) return false;
+
+    if (filtroGrupo && !sucursalCoincideConFiltro(emp.sucursal, filtroGrupo)) {
+      return false;
+    }
+
+    vistos.add(clave);
+    return true;
+  });
+
+  if (candidatos.length === 0) {
+    await sock.sendMessage(jid, {
+      text: `No encontré empleados que coincidan con "${busqueda}". Revisa el nombre o la sucursal.`
+    });
+    return;
+  }
+
+  if (candidatos.length === 1) {
+    await resumenEmpleado(
+      candidatos[0].nombreOriginal,
+      jid,
+      sock,
+      tipo,
+      candidatos[0]
+    );
+    return;
+  }
+
+  const opciones = candidatos.map(emp => ({
+    valor: {
+      nombre: emp.nombreOriginal,
+      tel: emp.tel || '',
+      sucursal: emp.sucursal || '',
+      area: emp.area || ''
+    },
+    texto: `${emp.nombreOriginal} | ${emp.sucursal || 'Sucursal sin especificar'} | ${emp.area || 'Área sin especificar'}`
+  }));
+
+  await iniciarLista({
+    jid,
+    usuario: '',
+    contexto: {
+      proceso: 'RESUMEN_EMPLEADO',
+      tipo,
+      filtroGrupo
+    },
+    opciones,
+    mensaje: `Encontré varios empleados para "${busqueda}". Escribe el número correspondiente:`
+  });
+}
 
 function coincideNombreCompleto(nombre, busqueda) {
   const nombreNormalizado = normaliza(nombre || '');
@@ -837,12 +913,13 @@ async function enviarDatosBancarios(nombreBuscar,jid,sock,filtroGrupo){
 // =====================================================
 
 
-export async function resumenEmpleado(
+async function resumenEmpleado(
   nombreBuscar,
   jidRespuesta,
   sock,
-  tipo='actual'
-){
+  tipo = 'actual',
+  empleadoSeleccionado = null
+) {
 
   const sClient=await sheetsClient()
 
@@ -900,7 +977,7 @@ export async function resumenEmpleado(
   for(const f of filas){
 
     const n=normaliza(f[1]||'')
-    if(!n.includes(buscar))continue
+     if (!coincideNombreCompleto(f[1] || '', buscar)) continue;
 
     const fe=parseFechaMX(f[2])
     if(!fe)continue
@@ -1099,7 +1176,7 @@ export async function generarExcelEmpleado(
   const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
 
   const filtradas=filas.filter(f=>{
-    if(!normaliza(f[1]||'').includes(buscar))return false
+  if (!coincideNombreCompleto(f[1] || '', buscar)) return false;
     const fe=parseFechaMX(f[2])
     return fe&&fe>=lunes&&fe<=domingo
   })
@@ -2148,74 +2225,51 @@ export async function handleReportes({
   // RESUMEN
   // ================================================
 
-  if(low.startsWith('resumen ')){
+if (low.startsWith('resumen ')) {
+  let tipo = 'actual';
 
-    let tipo='actual'
-
-    if(
-      low.includes('pasada')||
-      low.includes('pasado')
-    ){
-      tipo='pasada'
-    }
-
-    let limpio=texto
-      .slice(8)
-      .toLowerCase()
-      .trim()
-      .replace(
-        /pasada|pasado|actual|esta semana|hoy/g,
-        ''
-      )
-      .trim()
-
-    if(
-      limpio.includes('bucareli')||
-      limpio.includes('coyo')||
-      limpio.includes('hotel')
-    ){
-
-      let suc='coyoacan'
-
-      if(limpio.includes('bucareli')){
-        suc='bucareli'
-      }
-
-      await reporteSucursal(
-        suc,
-        jid,
-        sock,
-        tipo
-      )
-
-      await generarExcelSemanaYEnviar(
-        suc,
-        jid,
-        sock,
-        tipo
-      )
-
-      return true
-    }
-
-    if(!limpio){
-
-      await sock.sendMessage(jid,{
-        text:'Escribe: resumen [nombre] pasada o actual'
-      })
-
-      return true
-    }
-
-    await resumenEmpleado(
-      limpio,
-      jid,
-      sock,
-      tipo
-    )
-
-    return true
+  if (low.includes('pasada') || low.includes('pasado')) {
+    tipo = 'pasada';
   }
+
+  let limpio = texto.slice(8)
+    .toLowerCase()
+    .trim()
+    .replace(/pasada|pasado|actual|esta semana|hoy/g, '')
+    .trim();
+
+  if (
+    limpio.includes('bucareli') ||
+    limpio.includes('coyo') ||
+    limpio.includes('hotel')
+  ) {
+    let suc = 'coyoacan';
+
+    if (limpio.includes('bucareli')) {
+      suc = 'bucareli';
+    }
+
+    await reporteSucursal(suc, jid, sock, tipo);
+    await generarExcelSemanaYEnviar(suc, jid, sock, tipo);
+    return true;
+  }
+
+  if (!limpio) {
+    await sock.sendMessage(jid, {
+      text: 'Escribe: resumen [nombre] pasada o actual'
+    });
+    return true;
+  }
+
+  await buscarEmpleadoParaResumen(
+  limpio,
+  jid,
+  sock,
+  tipo,
+  filtroGrupo
+);
+return true;
+}
 
   // ================================================
   // REPORTES
