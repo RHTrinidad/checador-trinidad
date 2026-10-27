@@ -66,15 +66,7 @@ async function buscarEmpleadoParaResumen(
     return;
   }
 
-const opciones = candidatos.map(emp => ({
-  valor: {
-    nombre: emp.nombreOriginal,
-    tel: emp.tel || '',
-    sucursal: emp.sucursal || '',
-    area: emp.area || ''
-  },
-  texto: `${emp.nombreOriginal} | ${emp.sucursal || 'Sucursal sin especificar'} | ${emp.area || 'Área sin especificar'}`
-}));
+
 
   const opcionesNumeradas = {};
 
@@ -965,17 +957,20 @@ async function resumenEmpleado(
 
   const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
 
-const telSeleccionado = String(
-  empleadoSeleccionado?.tel || ''
-).replace(/\D/g, '').slice(-10);
-
-const info = telSeleccionado
-  ? Object.values(baseMap).find(v =>
-      String(v.tel || '').replace(/\D/g, '').slice(-10) === telSeleccionado
-    ) || {
-      descansos: new Set(),
-      horas: {}
-    }
+  const info = telSeleccionado
+    ? Object.values(baseMap).find(v =>
+        String(v.tel || '').replace(/\D/g, '').slice(-10) === telSeleccionado
+      ) || {
+        descansos: new Set(),
+        horas: {}
+      }
+    : baseMap[buscar] ||
+      Object.values(baseMap).find(v =>
+        coincideNombreCompleto(v.nombreOriginal || '', buscar)
+      ) || {
+        descansos: new Set(),
+        horas: {}
+      };
   : baseMap[buscar] ||
     Object.values(baseMap).find(v =>
       coincideNombreCompleto(v.nombreOriginal || '', buscar)
@@ -1208,7 +1203,7 @@ async function generarExcelEmpleado(
   const filas=asisRes.data.values||[]
 
   const buscar=normaliza(
-    nombreBuscarRaw.replace(
+   nombreBuscar.replace(
       /actual|pasada|pasado|esta semana|hoy/g,
       ''
     )
