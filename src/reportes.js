@@ -788,6 +788,12 @@ async function buscarEmpleado(nombreBuscar,filtroGrupo=null){
 
   const empRows=await getRows('Empleados!A:T')
   const buscar=normaliza(nombreBuscar)
+  
+  const nombreReporte =
+  empleadoSeleccionado?.nombreOriginal ||
+  empleadoSeleccionado?.nombre ||
+  nombreBuscar.trim();
+  
   const candidatos=[]
 
   for(const r of empRows.slice(1)){
@@ -964,14 +970,7 @@ async function resumenEmpleado(
         descansos: new Set(),
         horas: {}
       }
-    : baseMap[buscar] ||
-      Object.values(baseMap).find(v =>
-        coincideNombreCompleto(v.nombreOriginal || '', buscar)
-      ) || {
-        descansos: new Set(),
-        horas: {}
-      };
-  : baseMap[buscar] ||
+     : baseMap[buscar] ||
     Object.values(baseMap).find(v =>
       coincideNombreCompleto(v.nombreOriginal || '', buscar)
     ) || {
@@ -1233,7 +1232,7 @@ const filtradas = filas.filter(f => {
   const ws=wb.addWorksheet('Resumen')
 
   ws.addRow([
-    `REPORTE ${buscar.toUpperCase()} - ${tipo.toUpperCase()}`
+`REPORTE ${nombreReporte.toUpperCase()} - ${tipo.toUpperCase()}`
   ]).font={bold:true,size:14}
 
   ws.addRow([rangoTxt])
@@ -1305,15 +1304,15 @@ const filtradas = filas.filter(f => {
     'Horas Extra'
   ]).font={bold:true}
 
-  ws.addRow([
-    buscar,
-    `${dias} días`,
-    `Ret ${ret}`,
-    minRet,
-    sin,
-    formatoHoras(horasMin),
-    formatoHoras(extraMin)
-  ])
+ws.addRow([
+  nombreReporte,
+  `${dias} días`,
+  `Ret ${ret}`,
+  minRet,
+  sin,
+  formatoHoras(horasMin),
+  formatoHoras(extraMin)
+])
 
   ws.columns.forEach(c=>c.width=22)
 
