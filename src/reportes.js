@@ -16,7 +16,8 @@ async function buscarEmpleadoParaResumen(
   jid,
   sock,
   tipo = 'actual',
-  filtroGrupo = ''
+  filtroGrupo = '',
+  usuario = ''
 ) {
   const baseMap = await getHorarioBaseMap();
   const buscar = normaliza(busqueda);
@@ -75,17 +76,33 @@ const opciones = candidatos.map(emp => ({
   texto: `${emp.nombreOriginal} | ${emp.sucursal || 'Sucursal sin especificar'} | ${emp.area || 'Área sin especificar'}`
 }));
 
-  await iniciarLista({
+  const opcionesNumeradas = {};
+
+  candidatos.forEach((emp, indice) => {
+    opcionesNumeradas[indice + 1] = {
+      valor: {
+        nombre: emp.nombreOriginal,
+        tel: emp.tel || '',
+        sucursal: emp.sucursal || '',
+        area: emp.area || ''
+      },
+      texto: `${emp.nombreOriginal} | ${emp.sucursal || 'Sucursal sin especificar'} | ${emp.area || 'Área sin especificar'}`
+    };
+  });
+
+  const mensajeLista = iniciarLista({
     jid,
-    usuario: '',
+   usuario: String(usuario || '').replace(/\D/g, '').slice(-10),
     contexto: {
       proceso: 'RESUMEN_EMPLEADO',
       tipo,
       filtroGrupo
     },
-    opciones,
+    opciones: opcionesNumeradas,
     mensaje: `Encontré varios empleados para "${busqueda}". Escribe el número correspondiente:`
   });
+
+  await sock.sendMessage(jid, { text: mensajeLista });
 }
 
 function coincideNombreCompleto(nombre, busqueda) {
@@ -2288,12 +2305,13 @@ if (low.startsWith('resumen ')) {
     return true;
   }
 
-  await buscarEmpleadoParaResumen(
+await buscarEmpleadoParaResumen(
   limpio,
   jid,
   sock,
   tipo,
-  filtroGrupo
+  filtroGrupo,
+  usuario
 );
 return true;
 }
