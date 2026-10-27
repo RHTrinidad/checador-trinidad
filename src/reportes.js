@@ -965,16 +965,25 @@ async function resumenEmpleado(
 
   const {lunes,domingo,rangoTxt}=getRangoSemana(tipo)
 
-  const info=
-    baseMap[buscar]||
-    Object.values(baseMap).find(v=>
-      normaliza(v.nombreOriginal).includes(buscar)
-    )||
-    {
-      descansos:new Set(),
-      horas:{}
-    }
+const telSeleccionado = String(
+  empleadoSeleccionado?.tel || ''
+).replace(/\D/g, '').slice(-10);
 
+const info = telSeleccionado
+  ? Object.values(baseMap).find(v =>
+      String(v.tel || '').replace(/\D/g, '').slice(-10) === telSeleccionado
+    ) || {
+      descansos: new Set(),
+      horas: {}
+    }
+  : baseMap[buscar] ||
+    Object.values(baseMap).find(v =>
+      coincideNombreCompleto(v.nombreOriginal || '', buscar)
+    ) || {
+      descansos: new Set(),
+      horas: {}
+    };
+  
   let diasSem=0
   let retSem=0
   let minSem=0
