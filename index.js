@@ -89,7 +89,9 @@ async function conectar(){
   if(iniciando)return
   iniciando=true
   try{
-    const{state,saveCreds}=await useMultiFileAuthState(AUTH_DIR)
+   const AUTH_NUEVA='/app/auth_nueva'
+
+const{state,saveCreds}=await useMultiFileAuthState(AUTH_NUEVA)
     console.log('AUTH DIR:',AUTH_DIR)
     let version
     try{
